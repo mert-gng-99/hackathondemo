@@ -12,6 +12,7 @@ a logged WARNING), determinism (seeded ICA + sklearn RNG), traceability
 """
 from __future__ import annotations
 
+import mne
 import numpy as np
 
 from src.core.logger import get_logger
@@ -37,3 +38,27 @@ def is_valid_epoch(epoch: np.ndarray | None) -> bool:
     if not np.all(np.isfinite(epoch)):
         return False
     return True
+
+
+def bandpass_filter(
+    raw: mne.io.BaseRaw,
+    l_freq: float = 1.0,
+    h_freq: float = 40.0,
+) -> mne.io.BaseRaw:
+    """Apply a non-mutating bandpass filter to an MNE Raw.
+
+    Default 1-40 Hz removes drift below 1 Hz and high-frequency noise / line
+    artifacts above 40 Hz. Returns a copy; the input `raw` is unchanged.
+
+    Args:
+        raw: Loaded `mne.io.BaseRaw` (call `.load_data()` first if from disk).
+        l_freq: Low-cut frequency in Hz.
+        h_freq: High-cut frequency in Hz.
+
+    Returns:
+        A filtered copy of `raw`.
+    """
+    out = raw.copy()
+    out.filter(l_freq=l_freq, h_freq=h_freq, picks="all", verbose="ERROR")
+    logger.info("Bandpass filter applied: %.1f-%.1f Hz", l_freq, h_freq)
+    return out
