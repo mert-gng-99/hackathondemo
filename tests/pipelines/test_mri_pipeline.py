@@ -445,3 +445,24 @@ class TestRunPipeline:
         extract_idx = log_output.index("Feature extraction complete:")
         wrote_idx = log_output.index("Wrote processed features to")
         assert extract_idx < wrote_idx, "extraction summary must precede write log"
+
+
+import mlflow
+from src.pipelines import mri_pipeline as _mri_for_mlflow_test
+from tests.fixtures import build_mri_fixture as _build_mri_for_mlflow_test
+
+
+class TestMRIPipelineMLflow:
+    def test_run_pipeline_creates_mlflow_run(self, tmp_path):
+        fixture_dir = _build_mri_for_mlflow_test.build(out_dir=tmp_path / "mri_fixture")
+        out = tmp_path / "out.parquet"
+        _mri_for_mlflow_test.run_pipeline(
+            input_dir=fixture_dir, output_path=out,
+        )
+        runs = mlflow.search_runs(
+            experiment_names=["mri_pipeline"],
+            order_by=["start_time DESC"],
+        )
+        assert len(runs) >= 1
+        assert "metrics.subjects_out" in runs.columns
+        assert runs.iloc[0]["metrics.subjects_out"] > 0

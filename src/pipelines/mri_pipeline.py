@@ -11,6 +11,7 @@ traceability (in/out/dropped counts at INFO), and idempotent overwrite.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import nibabel as nib
@@ -21,6 +22,7 @@ from scipy import ndimage as scipy_ndimage
 from src.core.determinism import pin_threads
 from src.core.logger import get_logger
 from src.core.storage import write_parquet
+from src.core.tracking import track_pipeline_run
 
 logger = get_logger(__name__)
 
@@ -315,6 +317,7 @@ def run_pipeline(
     if not sites_csv.exists():
         raise FileNotFoundError(f"sites_csv not found: {sites_csv}")
 
+    started = time.perf_counter()
     logger.info("Reading MRI volumes from %s", input_dir)
     nifti_paths = _list_nifti_volumes(input_dir)
     sites_df = pd.read_csv(sites_csv)
@@ -354,64 +357,84 @@ def run_pipeline(
             "Feature extraction complete: in=%d, out=0, dropped=%d (%.2f%%)",
             n_total, n_dropped, 100.0 * n_dropped / max(n_total, 1),
         )
-        empty = pd.DataFrame(
+        final = pd.DataFrame(
             columns=["subject_id", "site", *feature_cols]
         ).astype({c: np.float64 for c in feature_cols})
-        write_parquet(empty, output_path)
-        return
-
-    raw_features = pd.DataFrame(rows)
-    raw_features = raw_features.merge(sites_df, on="subject_id", how="left")
-    if raw_features["site"].isna().any():
-        missing = raw_features.loc[raw_features["site"].isna(), "subject_id"].tolist()
-        raise KeyError(
-            f"sites_csv missing site assignment for subjects: {missing}"
-        )
-
-    # ComBat cannot handle (near-)zero-variance columns: var_pooled ≈ 0 produces
-    # NaN. Split feature_cols on a strictly-positive variance floor so ULP-level
-    # noise is treated as constant.
-    col_std = raw_features[feature_cols].std()
-    var_feature_cols = [c for c in feature_cols if col_std[c] > _MIN_VAR_THRESHOLD]
-    zero_var_cols = [c for c in feature_cols if col_std[c] <= _MIN_VAR_THRESHOLD]
-
-    if not var_feature_cols:
-        # Degenerate dataset: every feature is essentially constant. ComBat has
-        # no signal to harmonize on; pass all columns through and warn.
-        logger.warning(
-            "All %d feature columns have variance ≤ %.1e; ComBat skipped "
-            "(output contains unharmonized features).",
-            len(feature_cols), _MIN_VAR_THRESHOLD,
-        )
-        harmonized = raw_features[feature_cols].copy()
     else:
-        harmonized = harmonize_combat(
-            raw_features, raw_features["site"], var_feature_cols,
+        raw_features = pd.DataFrame(rows)
+        raw_features = raw_features.merge(sites_df, on="subject_id", how="left")
+        if raw_features["site"].isna().any():
+            missing = raw_features.loc[raw_features["site"].isna(), "subject_id"].tolist()
+            raise KeyError(
+                f"sites_csv missing site assignment for subjects: {missing}"
+            )
+
+        # ComBat cannot handle (near-)zero-variance columns: var_pooled ≈ 0 produces
+        # NaN. Split feature_cols on a strictly-positive variance floor so ULP-level
+        # noise is treated as constant.
+        col_std = raw_features[feature_cols].std()
+        var_feature_cols = [c for c in feature_cols if col_std[c] > _MIN_VAR_THRESHOLD]
+        zero_var_cols = [c for c in feature_cols if col_std[c] <= _MIN_VAR_THRESHOLD]
+
+        if not var_feature_cols:
+            # Degenerate dataset: every feature is essentially constant. ComBat has
+            # no signal to harmonize on; pass all columns through and warn.
+            logger.warning(
+                "All %d feature columns have variance ≤ %.1e; ComBat skipped "
+                "(output contains unharmonized features).",
+                len(feature_cols), _MIN_VAR_THRESHOLD,
+            )
+            harmonized = raw_features[feature_cols].copy()
+        else:
+            harmonized = harmonize_combat(
+                raw_features, raw_features["site"], var_feature_cols,
+            )
+            # Re-attach zero-variance columns (unchanged) and restore the original
+            # column order.
+            for c in zero_var_cols:
+                harmonized[c] = raw_features[c].to_numpy()
+            harmonized = harmonized[feature_cols]
+
+        final = pd.concat(
+            [raw_features[["subject_id", "site"]].reset_index(drop=True),
+             harmonized.reset_index(drop=True)],
+            axis=1,
         )
-        # Re-attach zero-variance columns (unchanged) and restore the original
-        # column order.
-        for c in zero_var_cols:
-            harmonized[c] = raw_features[c].to_numpy()
-        harmonized = harmonized[feature_cols]
 
-    final = pd.concat(
-        [raw_features[["subject_id", "site"]].reset_index(drop=True),
-         harmonized.reset_index(drop=True)],
-        axis=1,
-    )
-
-    logger.info(
-        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
-        n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
-    )
+        logger.info(
+            "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
+            n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
+        )
 
     # Parquet preserves dtypes (float64 features stay float64) and is
-    # byte-deterministic with single-threaded snappy. AGENTS.md §6.
+    # byte-deterministic with single-threaded snappy. AGENTS.md §6. Unconditional
+    # so the §4-rule-4 traceability log fires for both empty and non-empty paths.
     write_parquet(final, output_path)
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(final), final.shape[1],
     )
+
+    duration_sec = time.perf_counter() - started
+
+    with track_pipeline_run(
+        experiment_name="mri_pipeline",
+        params={
+            "input_dir": str(input_dir),
+            "sites_csv": str(sites_csv),
+            "output_path": str(output_path),
+            "intensity_threshold": str(intensity_threshold),
+            "n_roi_axes": str(n_roi_axes),
+        },
+        metrics={
+            "subjects_in": float(n_total),
+            "subjects_out": float(len(final)),
+            "subjects_dropped": float(n_dropped),
+            "duration_sec": duration_sec,
+        },
+        artifact_path=output_path,
+    ):
+        pass
 
 
 if __name__ == "__main__":
