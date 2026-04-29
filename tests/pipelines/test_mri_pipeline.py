@@ -103,3 +103,28 @@ class TestMaskBrain:
         # Without cleanup, the single voxel would survive. With morphological
         # opening, it must be removed.
         assert mask.sum() == 0
+
+    def test_constant_volume_returns_all_false_mask_with_warning(self) -> None:
+        """A constant-valued volume produces an empty mask AND logs a WARNING."""
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import mri_pipeline as mod
+
+        vol = np.full((8, 8, 8), 5.0, dtype=np.float64)
+
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            mask = mask_brain(vol)
+        finally:
+            handler.stream = original_stream
+
+        assert mask.sum() == 0
+        log_output = buf.getvalue()
+        assert "all-False mask" in log_output
+        assert "downstream features for this volume will be all-zero" in log_output

@@ -63,8 +63,15 @@ def mask_brain(
          `None`, use the volume's mean as a robust auto-threshold (works on
          the synthetic fixture where brain ≫ background; for real data the
          caller should pass an Otsu or BET-derived threshold explicitly).
-      2. Morphological opening (`scipy.ndimage.binary_opening`) to remove
-         isolated noise voxels and disconnected fragments.
+      2. Morphological opening (`scipy.ndimage.binary_opening`, 6-connectivity,
+         iterations=1) to remove isolated noise voxels and disconnected
+         fragments. Note: thin features (< 3 voxels wide along any axis pair)
+         may be eroded entirely; for production data with cortical sheets or
+         sulcal bridges, prefer 26-connectivity or pass `iterations=0` upstream.
+
+    If the resulting mask is all-False (e.g. caller passed a threshold above
+    the volume's max intensity, or the volume is constant-valued), a WARNING
+    is emitted so silent feature-zeroing is visible in production logs.
 
     Args:
         volume: 3-D numeric `np.ndarray` (must satisfy `is_valid_volume`).
@@ -77,5 +84,12 @@ def mask_brain(
         intensity_threshold = float(volume.mean())
 
     raw = volume > intensity_threshold
-    cleaned = scipy_ndimage.binary_opening(raw, iterations=1)
-    return cleaned.astype(bool)
+    cleaned = scipy_ndimage.binary_opening(raw, iterations=1).astype(bool)
+    if not cleaned.any():
+        logger.warning(
+            "mask_brain produced an all-False mask "
+            "(volume min=%.4f, max=%.4f, threshold=%.4f); "
+            "downstream features for this volume will be all-zero.",
+            float(volume.min()), float(volume.max()), intensity_threshold,
+        )
+    return cleaned
