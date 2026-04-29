@@ -93,3 +93,77 @@ def mask_brain(
             float(volume.min()), float(volume.max()), intensity_threshold,
         )
     return cleaned
+
+
+# Default ROI partition: split a (D, H, W) volume into 2×2×2 = 8 octant ROIs.
+# Octant index follows binary (z, y, x) ordering: 0..7.
+DEFAULT_N_ROI_AXES: tuple[int, int, int] = (2, 2, 2)
+ROI_STATS: tuple[str, ...] = ("mean", "std", "p10", "p50", "p90", "voxel_count")
+
+
+def _roi_slices(
+    shape: tuple[int, int, int],
+    n_roi_axes: tuple[int, int, int],
+) -> list[tuple[slice, slice, slice]]:
+    """Generate the ROI slice list in deterministic (z, y, x) octant order."""
+    nz, ny, nx = n_roi_axes
+    dz, dy, dx = shape
+    bins_z = np.array_split(np.arange(dz), nz)
+    bins_y = np.array_split(np.arange(dy), ny)
+    bins_x = np.array_split(np.arange(dx), nx)
+    out: list[tuple[slice, slice, slice]] = []
+    for bz in bins_z:
+        for by in bins_y:
+            for bx in bins_x:
+                out.append((
+                    slice(bz[0], bz[-1] + 1),
+                    slice(by[0], by[-1] + 1),
+                    slice(bx[0], bx[-1] + 1),
+                ))
+    return out
+
+
+def _roi_stats_for(values: np.ndarray) -> dict[str, float]:
+    """Compute the 6 ROI stats. Empty array → all 0.0 (no-NaN contract)."""
+    if values.size == 0:
+        return {stat: 0.0 for stat in ROI_STATS}
+    return {
+        "mean": float(values.mean()),
+        "std": float(values.std()),
+        "p10": float(np.percentile(values, 10)),
+        "p50": float(np.percentile(values, 50)),
+        "p90": float(np.percentile(values, 90)),
+        "voxel_count": float(values.size),
+    }
+
+
+def extract_features_from_volume(
+    volume: np.ndarray,
+    mask: np.ndarray,
+    n_roi_axes: tuple[int, int, int] = DEFAULT_N_ROI_AXES,
+) -> dict[str, float]:
+    """Compute per-ROI summary statistics from a masked volume.
+
+    The volume is partitioned into ``prod(n_roi_axes)`` axis-aligned octants
+    in deterministic (z, y, x) order. For each ROI, intensity values from
+    voxels where `mask` is True are summarized via mean / std / 10th, 50th,
+    90th percentile / voxel count. Empty ROIs (no mask voxels) report all
+    zeros so the resulting Parquet has no NaN values.
+
+    Args:
+        volume: 3-D numeric `np.ndarray` (already validated).
+        mask: Boolean `np.ndarray` of the same shape (from `mask_brain`).
+        n_roi_axes: ROI grid along (z, y, x). Default `(2, 2, 2)` → 8 ROIs.
+
+    Returns:
+        Flat dict `{"feat_roi{i}_{stat}": float}` of length
+        ``prod(n_roi_axes) * len(ROI_STATS)``.
+    """
+    feats: dict[str, float] = {}
+    slices = _roi_slices(volume.shape, n_roi_axes)
+    for i, sl in enumerate(slices):
+        roi_values = volume[sl][mask[sl]]
+        stats = _roi_stats_for(roi_values)
+        for stat_name, stat_val in stats.items():
+            feats[f"feat_roi{i}_{stat_name}"] = stat_val
+    return feats

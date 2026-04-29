@@ -8,6 +8,9 @@ import numpy as np
 import pytest
 
 from src.pipelines.mri_pipeline import (
+    DEFAULT_N_ROI_AXES,
+    ROI_STATS,
+    extract_features_from_volume,
     is_valid_volume,
     mask_brain,
 )
@@ -128,3 +131,61 @@ class TestMaskBrain:
         log_output = buf.getvalue()
         assert "all-False mask" in log_output
         assert "downstream features for this volume will be all-zero" in log_output
+
+
+class TestExtractFeaturesFromVolume:
+    def _load_subject(self, sid: str) -> np.ndarray:
+        return nib.load(FIXTURE_DIR / f"{sid}.nii.gz").get_fdata()
+
+    def test_returns_dict_with_correct_keys(self) -> None:
+        vol = self._load_subject("subject_0")
+        mask = mask_brain(vol)
+        feats = extract_features_from_volume(vol, mask)
+        n_roi = int(np.prod(DEFAULT_N_ROI_AXES))
+        expected = {
+            f"feat_roi{i}_{stat}"
+            for i in range(n_roi)
+            for stat in ROI_STATS
+        }
+        assert set(feats.keys()) == expected
+
+    def test_feature_count_matches_contract(self) -> None:
+        vol = self._load_subject("subject_0")
+        mask = mask_brain(vol)
+        feats = extract_features_from_volume(vol, mask)
+        n_roi = int(np.prod(DEFAULT_N_ROI_AXES))
+        assert len(feats) == n_roi * len(ROI_STATS)
+
+    def test_all_features_finite_float(self) -> None:
+        vol = self._load_subject("subject_0")
+        mask = mask_brain(vol)
+        feats = extract_features_from_volume(vol, mask)
+        for k, v in feats.items():
+            assert isinstance(v, float), f"{k}: {type(v).__name__}"
+            assert np.isfinite(v), f"{k}: {v}"
+
+    def test_voxel_count_is_integer_valued(self) -> None:
+        vol = self._load_subject("subject_0")
+        mask = mask_brain(vol)
+        feats = extract_features_from_volume(vol, mask)
+        for k, v in feats.items():
+            if k.endswith("_voxel_count"):
+                # voxel_count stored as float for column-uniformity, but must be
+                # a whole number.
+                assert v == float(int(v))
+
+    def test_empty_mask_yields_zero_features(self) -> None:
+        """If a volume has zero brain voxels (mask all False), every stat
+        must default to 0.0 — not NaN — to preserve the no-NaN Parquet contract."""
+        vol = self._load_subject("subject_0")
+        empty_mask = np.zeros_like(vol, dtype=bool)
+        feats = extract_features_from_volume(vol, empty_mask)
+        for k, v in feats.items():
+            assert v == 0.0, f"{k}: {v}"
+
+    def test_deterministic_for_same_input(self) -> None:
+        vol = self._load_subject("subject_0")
+        mask = mask_brain(vol)
+        a = extract_features_from_volume(vol, mask)
+        b = extract_features_from_volume(vol, mask)
+        assert a == b
