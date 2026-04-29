@@ -148,3 +148,30 @@ class TestRemoveArtifactsWithIca:
             raw, eog_ch_name="EOG061", n_components=4, random_state=97,
         )
         np.testing.assert_allclose(a.get_data(), b.get_data(), rtol=1e-12, atol=1e-15)
+
+    def test_unknown_eog_channel_logs_warning_and_is_a_noop(self) -> None:
+        """A misconfigured eog_ch_name (typo) must not silently behave like None."""
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import eeg_pipeline as mod
+
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            out = remove_artifacts_with_ica(
+                raw, eog_ch_name="EOG_DOES_NOT_EXIST",
+                n_components=4, random_state=97,
+            )
+        finally:
+            handler.stream = original_stream
+
+        # Behavior: ICA was skipped (no-op) but the log differentiates it from None.
+        np.testing.assert_allclose(out.get_data(), raw.get_data(), rtol=1e-6, atol=1e-12)
+        log_output = buf.getvalue()
+        assert "ICA skipped: eog_ch_name='EOG_DOES_NOT_EXIST' not found" in log_output

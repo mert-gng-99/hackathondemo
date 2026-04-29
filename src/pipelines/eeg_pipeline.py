@@ -20,6 +20,12 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Pearson-correlation threshold for EOG-component rejection in ICA.
+# Real-world EOG components typically score 0.8-0.95 against the EOG channel;
+# 0.9 is a conservative floor that avoids false positives at the cost of
+# missing weak artifacts. Lower (0.7-0.8) for noisier recordings.
+_EOG_CORR_THRESHOLD: float = 0.9
+
 
 def is_valid_epoch(epoch: np.ndarray | None) -> bool:
     """Return True iff `epoch` is a non-empty 2-D numeric array with no NaN/inf.
@@ -89,29 +95,42 @@ def remove_artifacts_with_ica(
     `measure="correlation"`, marks them as "bad" and reconstructs the signal
     without them. Returns a copy; the input `raw` is unchanged.
 
-    If `eog_ch_name` is None or no bad components are found, returns a copy of
-    `raw` unchanged. This keeps the function safe to call on recordings
-    without an EOG reference.
+    If `eog_ch_name` is None or not present in the recording's channels,
+    ICA is skipped entirely and a copy of `raw` is returned unchanged.
 
     Args:
         raw: Loaded, ideally bandpass-filtered, `mne.io.BaseRaw`.
         eog_ch_name: Name of the EOG channel for correlation-based detection.
-            None disables auto-rejection.
-        n_components: Cap on ICA components. For small recordings, MNE will
-            silently cap this at the rank of the data.
+            None disables auto-rejection; a string that is not in the recording's
+            channel list logs a WARNING and skips ICA.
+        n_components: Cap on ICA components. If this exceeds the number of EEG
+            channels, MNE raises ValueError, so the implementation internally
+            caps it at `max(n_eeg - 1, 1)` before fitting.
         random_state: Seed for ICA's underlying solver. Required for §4
             Determinism.
 
     Returns:
-        A copy of `raw` with EOG-correlated ICA components removed.
+        A copy of `raw` with EOG-correlated ICA components removed (or an
+        unchanged copy if ICA was skipped).
+
+    Raises:
+        ValueError: if the EEG data is rank-deficient (all-zero or constant
+            channels) and `mne.preprocessing.ICA.fit` cannot converge.
     """
     out = raw.copy()
-    if eog_ch_name is None or eog_ch_name not in out.ch_names:
-        logger.info("ICA skipped: no EOG channel reference provided")
+    if eog_ch_name is None:
+        logger.info("ICA skipped: eog_ch_name not provided")
+        return out
+    if eog_ch_name not in out.ch_names:
+        logger.warning(
+            "ICA skipped: eog_ch_name=%r not found in channels %s",
+            eog_ch_name, out.ch_names,
+        )
         return out
 
-    # Cap n_components at the rank of the data to avoid solver complaints
-    # on small synthetic fixtures.
+    # Cap n_components at rank-1. Average reference (if applied) reduces rank
+    # to n_eeg - 1; using that as the ceiling is safe for both referenced and
+    # unreferenced data and avoids ValueError from ICA.fit on small recordings.
     n_eeg = len(mne.pick_types(out.info, eeg=True, meg=False))
     safe_n = min(n_components, max(n_eeg - 1, 1))
 
@@ -130,13 +149,13 @@ def remove_artifacts_with_ica(
         out,
         ch_name=eog_ch_name,
         measure="correlation",
-        threshold=0.9,
+        threshold=_EOG_CORR_THRESHOLD,
         verbose="ERROR",
     )
     ica.exclude = list(bad_idx)
     logger.info(
-        "ICA fit: n_components=%d, EOG-correlated rejected=%d",
-        safe_n, len(ica.exclude),
+        "ICA fit: n_components=%d, EOG-correlated rejected=%d (indices=%s)",
+        safe_n, len(ica.exclude), ica.exclude,
     )
     ica.apply(out, verbose="ERROR")
     return out
