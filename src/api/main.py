@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from src.api.routes import router as pipeline_router
 from src.api.schemas import HealthResponse
 
 app = FastAPI(
@@ -13,6 +14,8 @@ app = FastAPI(
     description="Three-modality clinical-ML pipeline surface (BBB / EEG / MRI).",
     version="0.4.0",
 )
+
+app.include_router(pipeline_router)
 
 
 @app.get("/health", response_model=HealthResponse)
