@@ -1,0 +1,105 @@
+# NeuroBridge Enterprise Pipeline
+
+NeuroBridge Enterprise tackles the three chronic failure modes in clinical ML — data drift
+across acquisition sites, missing modalities, and signal/image artifacts — by running
+three specialist preprocessing pipelines (MRI ComBat harmonization, EEG MNE+ICA, and BBB
+molecular featurization with RDKit) behind a single FastAPI surface with MLflow tracking
+and Docker shipping.
+
+## Status
+
+| Day | Modality | Pipeline | Status |
+|-----|----------|----------|--------|
+| 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped — 30 tests green |
+| 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Planned (MNE-Python + ICA) |
+| 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Planned (ComBat harmonization) |
+
+## Quick Start
+
+**Prerequisite:** Python 3.10–3.12. The pinned `requirements.txt` has no cp313+ wheels;
+`.python-version` pins to 3.12.
+
+```bash
+# 1. Create venv and install
+python3.12 -m venv .venv312 && source .venv312/bin/activate && pip install -r requirements.txt
+
+# 2. Verify — expect 30 passed
+pytest -v
+
+# 3. Smoke run with the bundled 6-row fixture
+mkdir -p data/raw && cp tests/fixtures/bbbp_sample.csv data/raw/bbbp.csv
+python -m src.pipelines.bbb_pipeline
+
+# 4. Inspect the output at data/processed/bbbp_features.parquet
+python -c "import pandas as pd; df = pd.read_parquet('data/processed/bbbp_features.parquet'); print(df.shape, df.dtypes.head())"
+```
+
+> **Real BBBP data:** not bundled (gitignored). Download from
+> [Kaggle](https://www.kaggle.com/datasets/priyanagda/bbbp) or
+> [MoleculeNet](https://moleculenet.org/datasets-1); place as `data/raw/bbbp.csv`.
+
+## Repository Layout
+
+```text
+.
+├── AGENTS.md                 # Project contract (vision, layout, code & data rules) — read first
+├── README.md                 # this file
+├── requirements.txt          # Pinned deps; Python 3.10–3.12 only
+├── .python-version           # 3.12
+├── pytest.ini
+├── data/
+│   ├── raw/                  # vendor inputs (CSV / EDF / NIfTI); gitignored
+│   └── processed/            # Parquet outputs from pipelines; gitignored
+├── docs/superpowers/plans/   # Per-day implementation plans
+├── src/
+│   ├── core/logger.py        # Shared structured logger (mandatory in every pipeline)
+│   ├── pipelines/
+│   │   └── bbb_pipeline.py   # Day-1 pipeline (4 public funcs + CLI entry)
+│   └── api/                  # FastAPI surface (placeholder until Day 4+)
+└── tests/
+    ├── core/, pipelines/     # Mirror src/ structure
+    └── fixtures/             # bbbp_sample.csv (6 rows for smoke tests)
+```
+
+## BBB Pipeline (Day 1)
+
+| Function | Purpose |
+|----------|---------|
+| `is_valid_smiles(smiles)` | Returns `True` iff the input is a non-empty SMILES that RDKit can parse. Handles `None`, `NaN`, and garbage strings. |
+| `compute_morgan_fingerprint(smiles, n_bits, radius)` | Returns a `(n_bits,)` `uint8` numpy array using the modern `MorganGenerator` API. |
+| `extract_features_from_dataframe(df, smiles_col, n_bits, radius)` | Drops invalid rows (logged WARNING with truncated index list), expands fingerprints into `fp_0..fp_{n-1}` columns, preserves metadata. Returns a model-ready `pd.DataFrame`. |
+| `run_pipeline(input_path, output_path, smiles_col, n_bits, radius)` | End-to-end CSV → Parquet orchestrator. Idempotent; raises on missing input or directory output. |
+
+All four functions log via `src.core.logger.get_logger(__name__)` per AGENTS.md §3 and
+satisfy the §4 Data Readiness contract (5 invariants: schema validity, domain validity,
+determinism, traceability, idempotence).
+
+## Storage Format
+
+Pipeline outputs are written as Parquet files using the `pyarrow` engine with snappy
+compression. This preserves dtypes (`uint8` fingerprint columns stay `uint8` instead of
+widening to `int64` as CSV would do) and yields ~10× smaller files than CSV — material
+for the `float32` EEG features Day 2 will produce. See AGENTS.md §6.
+
+## Testing & TDD
+
+All four BBB functions and the shared logger were built TDD-first (RED → GREEN →
+REFACTOR). Each task ended in a green commit; review-and-fix loops landed as separate
+commits with `fix:` / `refactor:` prefixes. Run `pytest -v` at any time — the full suite
+finishes in under 2 seconds on a 2024 laptop.
+
+## Roadmap
+
+- **Day 2:** `eeg_pipeline.py` — load EDF/FIF, MNE-Python ICA artifact removal, write
+  `float32` features to Parquet.
+- **Day 3:** `mri_pipeline.py` — load NIfTI volumes, ComBat harmonization
+  (`neuroharmonize`) for site-level domain shift, write features to Parquet.
+- **Day 4+:** FastAPI surface in `src/api/`, MLflow experiment tracking, Docker images,
+  CI.
+
+## Where to Look
+
+- **Project rules (mandatory reading for any agent):** [`AGENTS.md`](AGENTS.md)
+- **Day-1 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md`](docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md)
+- **Logger contract:** [`src/core/logger.py`](src/core/logger.py) + [`tests/core/test_logger.py`](tests/core/test_logger.py)
+- **BBB pipeline:** [`src/pipelines/bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) + [`tests/pipelines/test_bbb_pipeline.py`](tests/pipelines/test_bbb_pipeline.py)
