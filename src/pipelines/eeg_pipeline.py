@@ -433,6 +433,8 @@ def run_pipeline(
         raise FileNotFoundError(f"Raw EEG file not found: {input_path}")
 
     logger.info("Reading raw EEG from %s", input_path)
+    # Format dispatch: .edf via read_raw_edf, anything else (FIF, gzipped FIF)
+    # via read_raw_fif. .bdf / .set / .vhdr support can be added here.
     if input_path.suffix.lower() == ".edf":
         raw = mne.io.read_raw_edf(input_path, preload=True, verbose="ERROR")
     else:
@@ -468,6 +470,8 @@ def run_pipeline(
 
 if __name__ == "__main__":
     # Day-2 CLI entrypoint — runs with default paths against `data/raw/eeg.fif`.
-    # Argument parsing (argparse / click) will land in a later task.
+    # Defaults to `eog_ch_name=None` (ICA disabled). Pass an EOG channel
+    # name programmatically via run_pipeline(eog_ch_name=...) to enable
+    # artifact rejection. Argument parsing (argparse / click) lands later.
     #   python -m src.pipelines.eeg_pipeline
     run_pipeline()

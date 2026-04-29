@@ -89,7 +89,7 @@ refactored into a pipeline.
 ## 6. Storage Format Convention
 
 All `data/processed/` outputs MUST be **Parquet** (`pyarrow` engine, `compression="snappy"`):
-- Preserves dtypes (uint8 fingerprints stay uint8; float32 EEG features stay float32) — CSV silently widens numeric columns and is unsuitable for the high-dimensional float arrays produced by the EEG and MRI pipelines.
+- Preserves dtypes (uint8 fingerprints stay uint8; float64 EEG features stay float64) — CSV silently widens numeric columns and is unsuitable for the high-dimensional float arrays produced by the EEG and MRI pipelines.
 - Byte-deterministic with fixed compression and single-threaded writes (satisfies §4 Determinism).
 - Read with `pd.read_parquet(path)`; no dtype hints required.
 

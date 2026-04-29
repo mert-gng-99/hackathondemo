@@ -408,7 +408,7 @@ class TestRunPipeline:
         assert first == second, "EEG pipeline output must be byte-deterministic"
 
     def test_run_pipeline_raises_when_input_missing(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="Raw EEG file not found"):
             run_pipeline(
                 input_path=tmp_path / "nope.fif",
                 output_path=tmp_path / "out.parquet",
