@@ -266,6 +266,14 @@ DEFAULT_INPUT = Path("data/raw/mri")
 DEFAULT_OUTPUT = Path("data/processed/mri_features.parquet")
 
 
+# Variance floor used to decide whether a feature column is "constant" for
+# ComBat. Strict ``std() > 0`` would still send near-zero-variance columns
+# (e.g. ULP-level differences) into ComBat, where var_pooled ≈ 0 produces
+# NaN. 1e-8 is well above machine epsilon and far below any biologically
+# meaningful signal variance.
+_MIN_VAR_THRESHOLD: float = 1e-8
+
+
 def _list_nifti_volumes(input_dir: Path) -> list[Path]:
     """Return sorted list of .nii / .nii.gz files in `input_dir`."""
     return sorted(
@@ -326,8 +334,7 @@ def run_pipeline(
             continue
         mask = mask_brain(volume, intensity_threshold=intensity_threshold)
         feats = extract_features_from_volume(volume, mask, n_roi_axes=n_roi_axes)
-        feats["subject_id"] = subject_id
-        rows.append(feats)
+        rows.append({"subject_id": subject_id, **feats})
 
     n_total = len(nifti_paths)
     n_dropped = len(invalid_subject_ids)
@@ -373,23 +380,41 @@ def run_pipeline(
             f"sites_csv missing site assignment for subjects: {missing}"
         )
 
-    # ComBat cannot handle zero-variance columns (var_pooled = 0 → NaN divide).
-    # Split feature_cols into variable (harmonize) and constant (pass through).
-    var_feature_cols = [c for c in feature_cols if raw_features[c].std() > 0]
-    zero_var_cols = [c for c in feature_cols if raw_features[c].std() == 0]
+    # ComBat cannot handle (near-)zero-variance columns: var_pooled ≈ 0 produces
+    # NaN. Split feature_cols on a strictly-positive variance floor so ULP-level
+    # noise is treated as constant.
+    col_std = raw_features[feature_cols].std()
+    var_feature_cols = [c for c in feature_cols if col_std[c] > _MIN_VAR_THRESHOLD]
+    zero_var_cols = [c for c in feature_cols if col_std[c] <= _MIN_VAR_THRESHOLD]
 
-    harmonized = harmonize_combat(
-        raw_features, raw_features["site"], var_feature_cols,
-    )
-    # Re-attach zero-variance columns (unchanged) and restore original column order.
-    for c in zero_var_cols:
-        harmonized[c] = raw_features[c].to_numpy()
-    harmonized = harmonized[feature_cols]
+    if not var_feature_cols:
+        # Degenerate dataset: every feature is essentially constant. ComBat has
+        # no signal to harmonize on; pass all columns through and warn.
+        logger.warning(
+            "All %d feature columns have variance ≤ %.1e; ComBat skipped "
+            "(output contains unharmonized features).",
+            len(feature_cols), _MIN_VAR_THRESHOLD,
+        )
+        harmonized = raw_features[feature_cols].copy()
+    else:
+        harmonized = harmonize_combat(
+            raw_features, raw_features["site"], var_feature_cols,
+        )
+        # Re-attach zero-variance columns (unchanged) and restore the original
+        # column order.
+        for c in zero_var_cols:
+            harmonized[c] = raw_features[c].to_numpy()
+        harmonized = harmonized[feature_cols]
 
     final = pd.concat(
         [raw_features[["subject_id", "site"]].reset_index(drop=True),
          harmonized.reset_index(drop=True)],
         axis=1,
+    )
+
+    logger.info(
+        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
+        n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -401,10 +426,6 @@ def run_pipeline(
     # byte-deterministic with single-threaded snappy. AGENTS.md §6.
     final.to_parquet(
         output_path, index=False, engine="pyarrow", compression="snappy",
-    )
-    logger.info(
-        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
-        n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
     )
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",

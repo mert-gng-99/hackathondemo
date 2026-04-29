@@ -378,3 +378,70 @@ class TestRunPipeline:
         # 5 surviving valid subjects (subject_5 dropped).
         assert len(df) == 5
         assert "subject_5" not in df["subject_id"].tolist()
+
+    def test_run_pipeline_handles_all_constant_features(self, tmp_path: Path) -> None:
+        """Degenerate dataset: every feature column is constant — ComBat must be
+        skipped gracefully with a WARNING, not crash with ValueError."""
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import mri_pipeline as mod
+
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        # Overwrite all volumes with the same constant intensity so every
+        # feature column is identical across subjects.
+        affine = np.eye(4)
+        for nii in sorted(raw_dir.glob("*.nii.gz")):
+            const_vol = np.full((8, 8, 8), 7.0, dtype=np.float64)
+            nib.save(nib.Nifti1Image(const_vol, affine=affine), nii)
+
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            run_pipeline(
+                input_dir=raw_dir, sites_csv=sites_csv,
+                output_path=output_path, intensity_threshold=1.0,
+            )
+        finally:
+            handler.stream = original_stream
+
+        df = pd.read_parquet(output_path)
+        assert len(df) == 6
+        feat_cols = [c for c in df.columns if c.startswith("feat_")]
+        # All-zero-variance fallback: features pass through unchanged.
+        assert df[feat_cols].notna().all().all()
+        log_output = buf.getvalue()
+        assert "ComBat skipped" in log_output
+
+    def test_run_pipeline_extraction_log_precedes_write(self, tmp_path: Path) -> None:
+        """The 'Feature extraction complete' INFO must fire BEFORE the
+        'Wrote processed features' INFO so that operators get a summary
+        even if to_parquet raises."""
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import mri_pipeline as mod
+
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            run_pipeline(
+                input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+            )
+        finally:
+            handler.stream = original_stream
+
+        log_output = buf.getvalue()
+        extract_idx = log_output.index("Feature extraction complete:")
+        wrote_idx = log_output.index("Wrote processed features to")
+        assert extract_idx < wrote_idx, "extraction summary must precede write log"
