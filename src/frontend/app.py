@@ -1,0 +1,405 @@
+"""NeuroBridge Enterprise — Streamlit B2B dashboard.
+
+Three tabs (Molecule / Signal / Image), each fires a POST request against the
+sibling FastAPI service and renders a result card with row counts, runtime,
+and a deep link to the corresponding MLflow run.
+
+Design: Trust & Authority — navy + sky CTA + cool-white background, Plus
+Jakarta Sans, generous whitespace. Avoids emoji icons, AI gradients, and
+playful flourishes (per design-system guidance for clinical-ML B2B).
+
+Launch: `streamlit run src/frontend/app.py`
+"""
+from __future__ import annotations
+
+import html as _html
+import os
+
+import httpx
+import streamlit as st
+
+
+_API_URL = os.environ.get("NEUROBRIDGE_API_URL", "http://localhost:8000")
+_MLFLOW_URL = os.environ.get(
+    "NEUROBRIDGE_MLFLOW_URL",
+    os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"),
+)
+_MLFLOW_DISABLED = os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") == "1"
+
+
+# Trust & Authority custom CSS — overrides Streamlit defaults to lock the
+# design-system tokens. Loaded once at app start via st.markdown.
+_CUSTOM_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"], .stApp, .stMarkdown, .stTabs, .stButton, .stTextInput {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
+.stApp {
+    background-color: #F8FAFC;
+}
+
+/* Brand header band */
+.brand-header {
+    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+    color: #F8FAFC;
+    padding: 1.75rem 2rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    border: 1px solid #1E293B;
+}
+.brand-header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0;
+    color: #FFFFFF;
+}
+.brand-header p {
+    color: #94A3B8;
+    margin: 0.25rem 0 0 0;
+    font-size: 0.95rem;
+    font-weight: 400;
+}
+
+/* Status pills */
+.status-pill {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-right: 0.5rem;
+}
+.status-ok    { background: #DCFCE7; color: #166534; }
+.status-warn  { background: #FEF3C7; color: #92400E; }
+.status-down  { background: #FEE2E2; color: #991B1B; }
+
+/* Cards / metric containers */
+[data-testid="stMetric"] {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 1.1rem 1.25rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+[data-testid="stMetricLabel"] {
+    color: #64748B;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+[data-testid="stMetricValue"] {
+    color: #0F172A;
+    font-weight: 700;
+    font-size: 1.85rem;
+}
+
+/* Primary action button */
+.stButton > button[kind="primary"] {
+    background: #0369A1;
+    color: #FFFFFF;
+    border: 0;
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 0.55rem 1.2rem;
+    transition: background 180ms ease, transform 120ms ease;
+}
+.stButton > button[kind="primary"]:hover {
+    background: #075985;
+    transform: translateY(-1px);
+}
+.stButton > button[kind="primary"]:focus {
+    outline: 3px solid rgba(3, 105, 161, 0.35);
+    outline-offset: 2px;
+}
+
+/* Tab strip */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.25rem;
+    border-bottom: 1px solid #E2E8F0;
+}
+.stTabs [data-baseweb="tab"] {
+    color: #64748B;
+    font-weight: 600;
+    padding: 0.65rem 1.25rem;
+    border-bottom: 2px solid transparent;
+    transition: color 150ms ease, border-color 150ms ease;
+}
+.stTabs [aria-selected="true"] {
+    color: #0F172A !important;
+    border-bottom-color: #0369A1 !important;
+}
+
+/* Section headers inside tabs */
+.section-eyebrow {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #0369A1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0;
+}
+.section-title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #0F172A;
+    margin: 0.15rem 0 0.5rem 0;
+    letter-spacing: -0.01em;
+}
+.section-desc {
+    color: #475569;
+    font-size: 0.95rem;
+    margin: 0 0 1.5rem 0;
+    line-height: 1.6;
+}
+
+/* Result card link styling */
+.mlflow-link a {
+    color: #0369A1;
+    text-decoration: none;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(3, 105, 161, 0.25);
+    transition: border-color 150ms ease;
+}
+.mlflow-link a:hover {
+    border-bottom-color: #0369A1;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #FFFFFF;
+    border-right: 1px solid #E2E8F0;
+}
+section[data-testid="stSidebar"] h3 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #64748B;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+</style>
+"""
+
+
+def _check_api_health() -> tuple[bool, str]:
+    """Ping FastAPI /health endpoint; return (ok, status_text)."""
+    try:
+        resp = httpx.get(f"{_API_URL}/health", timeout=2.0)
+        if resp.status_code == 200:
+            return True, "ok"
+        return False, f"http {resp.status_code}"
+    except httpx.RequestError as e:
+        return False, str(type(e).__name__)
+
+
+def _post(endpoint: str, payload: dict) -> dict:
+    """POST to the FastAPI surface; let httpx raise on non-2xx."""
+    resp = httpx.post(f"{_API_URL}{endpoint}", json=payload, timeout=120.0)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _render_brand_header() -> None:
+    st.markdown(
+        """
+        <div class="brand-header">
+            <h1>NeuroBridge Enterprise</h1>
+            <p>Three-modality clinical ML — Data Drift, Missing Modalities, Artifacts</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section(eyebrow: str, title: str, desc: str) -> None:
+    st.markdown(
+        f"""
+        <p class="section-eyebrow">{eyebrow}</p>
+        <h2 class="section-title">{title}</h2>
+        <p class="section-desc">{desc}</p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_result(body: dict) -> None:
+    """Render a 3-metric result card + MLflow deep link."""
+    cols = st.columns(3)
+    cols[0].metric("Rows", f"{body['rows']:,}")
+    cols[1].metric("Columns", f"{body['columns']:,}")
+    cols[2].metric("Runtime", f"{body['duration_sec']:.2f} s")
+
+    safe_output_path = _html.escape(str(body["output_path"]))
+    st.markdown(
+        f"<p style='color:#475569;margin:1rem 0 0.5rem 0;font-size:0.9rem;'>"
+        f"Output written to <code style='background:#E8ECF1;padding:2px 6px;border-radius:4px;'>"
+        f"{safe_output_path}</code></p>",
+        unsafe_allow_html=True,
+    )
+
+    run_id = body.get("mlflow_run_id")
+    if run_id and not _MLFLOW_DISABLED:
+        safe_run_id = _html.escape(str(run_id))
+        safe_url = _html.escape(_MLFLOW_URL, quote=True)
+        st.markdown(
+            f"<p class='mlflow-link'>MLflow run: "
+            f"<a href='{safe_url}/#/experiments/0/runs/{safe_run_id}' "
+            f"target='_blank' rel='noopener noreferrer'>{safe_run_id[:12]}…</a></p>",
+            unsafe_allow_html=True,
+        )
+    elif _MLFLOW_DISABLED:
+        st.markdown(
+            "<p style='color:#92400E;font-size:0.85rem;'>"
+            "MLflow tracking is disabled (NEUROBRIDGE_DISABLE_MLFLOW=1).</p>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_sidebar(api_ok: bool, api_status: str) -> None:
+    with st.sidebar:
+        st.markdown("### System Status")
+        safe_api_status = _html.escape(api_status)
+        api_pill = (
+            f"<span class='status-pill status-ok'>API · {safe_api_status}</span>"
+            if api_ok
+            else f"<span class='status-pill status-down'>API · {safe_api_status}</span>"
+        )
+        mlflow_pill = (
+            "<span class='status-pill status-warn'>MLflow · disabled</span>"
+            if _MLFLOW_DISABLED
+            else "<span class='status-pill status-ok'>MLflow · tracking</span>"
+        )
+        st.markdown(api_pill + mlflow_pill, unsafe_allow_html=True)
+
+        st.markdown("### Endpoints")
+        st.markdown(
+            f"<p style='font-size:0.8rem;color:#475569;line-height:1.7;'>"
+            f"FastAPI · <code>{_API_URL}</code><br/>"
+            f"MLflow · <code>{_MLFLOW_URL}</code></p>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("### About")
+        st.markdown(
+            "<p style='font-size:0.85rem;color:#475569;line-height:1.6;'>"
+            "Solving Data Drift, Missing Modalities, and Artifacts in clinical "
+            "biosignal pipelines. Three production modalities behind one FastAPI "
+            "surface, all runs tracked to MLflow.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_bbb_tab() -> None:
+    _render_section(
+        "MOLECULE — BBBP",
+        "Blood-Brain-Barrier permeability",
+        "Reads SMILES strings, validates with RDKit, and emits 2,048-bit "
+        "Morgan circular fingerprints (ECFP4-equivalent) ready for any "
+        "scikit-learn classifier.",
+    )
+    bbb_in = st.text_input("Input CSV path", "data/raw/bbbp.csv", key="bbb_in")
+    bbb_out = st.text_input("Output Parquet path", "data/processed/bbbp_features.parquet", key="bbb_out")
+    if st.button("Run BBB pipeline", type="primary", key="bbb_run"):
+        with st.spinner("Computing fingerprints…"):
+            try:
+                _render_result(_post("/pipeline/bbb", {
+                    "input_path": bbb_in, "output_path": bbb_out,
+                }))
+                st.toast("BBB pipeline complete", icon="✅")
+            except httpx.HTTPStatusError as e:
+                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+            except httpx.RequestError as e:
+                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+
+
+def _render_eeg_tab() -> None:
+    _render_section(
+        "SIGNAL — EEG",
+        "Electroencephalogram artifact removal",
+        "Bandpass-filters raw FIF/EDF recordings, removes EOG artifacts via "
+        "ICA decomposition, and extracts per-band PSD + statistical features "
+        "across fixed-duration epochs.",
+    )
+    eeg_in = st.text_input("Input FIF/EDF path", "data/raw/eeg.fif", key="eeg_in")
+    eeg_out = st.text_input("Output Parquet path", "data/processed/eeg_features.parquet", key="eeg_out")
+    if st.button("Run EEG pipeline", type="primary", key="eeg_run"):
+        with st.spinner("Filtering and running ICA…"):
+            try:
+                _render_result(_post("/pipeline/eeg", {
+                    "input_path": eeg_in, "output_path": eeg_out,
+                }))
+                st.toast("EEG pipeline complete", icon="✅")
+            except httpx.HTTPStatusError as e:
+                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+            except httpx.RequestError as e:
+                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+
+
+def _render_mri_tab() -> None:
+    _render_section(
+        "IMAGE — MRI",
+        "Multi-site harmonization via ComBat",
+        "Loads NIfTI volumes, masks brain tissue, computes per-ROI summary "
+        "statistics, then harmonizes across acquisition sites with neuroHarmonize "
+        "to remove scanner-driven domain shift.",
+    )
+    mri_dir = st.text_input("Input NIfTI directory", "data/raw/mri/", key="mri_dir")
+    sites_csv = st.text_input("Sites CSV", "data/raw/mri/sites.csv", key="mri_sites")
+    mri_out = st.text_input("Output Parquet path", "data/processed/mri_features.parquet", key="mri_out")
+    if st.button("Run MRI pipeline", type="primary", key="mri_run"):
+        with st.spinner("Masking, ROI extraction, and ComBat harmonization…"):
+            try:
+                _render_result(_post("/pipeline/mri", {
+                    "input_dir": mri_dir,
+                    "sites_csv": sites_csv,
+                    "output_path": mri_out,
+                }))
+                st.toast("MRI pipeline complete", icon="✅")
+            except httpx.HTTPStatusError as e:
+                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+            except httpx.RequestError as e:
+                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+
+
+def main() -> None:
+    """Streamlit entrypoint. Idempotent — Streamlit re-runs on every interaction."""
+    st.set_page_config(
+        page_title="NeuroBridge Enterprise",
+        page_icon=None,
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
+
+    api_ok, api_status = _check_api_health()
+    _render_brand_header()
+    _render_sidebar(api_ok, api_status)
+
+    if not api_ok:
+        st.warning(
+            f"⚠️ FastAPI surface is not reachable at `{_API_URL}` ({api_status}). "
+            "Pipeline runs will fail until the API service is up. "
+            "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
+        )
+
+    bbb_tab, eeg_tab, mri_tab = st.tabs([
+        "Molecule (BBB)",
+        "Signal (EEG)",
+        "Image (MRI)",
+    ])
+
+    with bbb_tab:
+        _render_bbb_tab()
+    with eeg_tab:
+        _render_eeg_tab()
+    with mri_tab:
+        _render_mri_tab()
+
+
+if __name__ == "__main__":
+    main()
