@@ -15,6 +15,7 @@ import os
 
 import nibabel as nib
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 from scipy import ndimage as scipy_ndimage
 
@@ -195,3 +196,54 @@ def extract_features_from_volume(
         for stat_name, stat_val in stats.items():
             feats[f"feat_roi{i}_{stat_name}"] = stat_val
     return feats
+
+
+def harmonize_combat(
+    features: pd.DataFrame,
+    sites: pd.Series,
+    feature_cols: list[str],
+) -> pd.DataFrame:
+    """Apply ComBat harmonization across sites to remove site-level domain shift.
+
+    Wraps `neuroHarmonize.harmonizationLearn` which fits a parametric ComBat
+    model (no internal RNG → byte-deterministic given fixed input). Only
+    `feature_cols` are harmonized; other columns in `features` (e.g.
+    metadata) are not touched by this function — callers should join after.
+
+    Args:
+        features: DataFrame with at least the columns listed in `feature_cols`.
+        sites: Site label per row (length must match `len(features)`).
+        feature_cols: Names of the columns to harmonize.
+
+    Returns:
+        A new DataFrame of identical shape & column order to
+        `features[feature_cols]`, with ComBat-harmonized values.
+
+    Raises:
+        ValueError: if fewer than 2 distinct sites are present.
+    """
+    from neuroHarmonize import harmonizationLearn
+
+    if sites.nunique() < 2:
+        raise ValueError(
+            f"ComBat requires at least 2 sites; got {sites.nunique()} "
+            f"({sites.unique().tolist()})"
+        )
+
+    matrix = features[feature_cols].to_numpy(dtype=np.float64)
+    covars = pd.DataFrame({"SITE": sites.to_numpy()})
+
+    _, harmonized = harmonizationLearn(matrix, covars)
+    # Round to 14 decimal places to eliminate sub-ULP floating-point noise
+    # (neuroHarmonize's internal matrix ops can produce ±1-ULP variation
+    # across calls; 14 d.p. retains all meaningful precision at float64).
+    out = pd.DataFrame(
+        np.round(np.asarray(harmonized, dtype=np.float64), 14),
+        columns=list(feature_cols),
+        index=features.index,
+    )
+    logger.info(
+        "ComBat harmonized %d rows × %d features across %d sites",
+        len(out), len(feature_cols), sites.nunique(),
+    )
+    return out

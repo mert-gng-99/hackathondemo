@@ -5,12 +5,14 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.pipelines.mri_pipeline import (
     DEFAULT_N_ROI_AXES,
     ROI_STATS,
     extract_features_from_volume,
+    harmonize_combat,
     is_valid_volume,
     mask_brain,
 )
@@ -203,3 +205,70 @@ class TestExtractFeaturesFromVolume:
         bad_mask = np.zeros((4, 4, 4), dtype=bool)
         with pytest.raises(ValueError, match=r"volume\.shape .* != mask\.shape"):
             extract_features_from_volume(vol, bad_mask)
+
+
+class TestHarmonizeCombat:
+    def _build_two_site_features(self) -> tuple[pd.DataFrame, pd.Series, list[str]]:
+        """Synthesize a 6-row × 4-feature table with a clear site bias."""
+        rng = np.random.default_rng(seed=42)
+        feature_cols = ["feat_roi0_mean", "feat_roi1_mean", "feat_roi2_mean", "feat_roi3_mean"]
+        # Site A baseline: mean ~0; Site B baseline: mean ~5 (the bias to remove).
+        site_a = rng.normal(loc=0.0, scale=1.0, size=(3, 4))
+        site_b = rng.normal(loc=5.0, scale=1.0, size=(3, 4))
+        df = pd.DataFrame(
+            np.vstack([site_a, site_b]),
+            columns=feature_cols,
+        )
+        sites = pd.Series(["A", "A", "A", "B", "B", "B"], name="site")
+        return df, sites, feature_cols
+
+    def test_returns_dataframe_same_shape_and_columns(self) -> None:
+        df, sites, feature_cols = self._build_two_site_features()
+        out = harmonize_combat(df, sites, feature_cols)
+        assert isinstance(out, pd.DataFrame)
+        assert out.shape == df.shape
+        assert list(out.columns) == feature_cols
+
+    def test_reduces_site_mean_difference(self) -> None:
+        """ComBat must shrink the per-site mean gap on every harmonized column."""
+        df, sites, feature_cols = self._build_two_site_features()
+        gap_before = (
+            df.loc[sites == "B", feature_cols].mean()
+            - df.loc[sites == "A", feature_cols].mean()
+        ).abs()
+
+        out = harmonize_combat(df, sites, feature_cols)
+        gap_after = (
+            out.loc[sites == "B", feature_cols].mean()
+            - out.loc[sites == "A", feature_cols].mean()
+        ).abs()
+
+        # Every column's site gap must shrink (ComBat aligns site means).
+        assert (gap_after < gap_before).all(), (
+            f"gap_before={gap_before.tolist()} gap_after={gap_after.tolist()}"
+        )
+
+    def test_output_dtype_float64(self) -> None:
+        df, sites, feature_cols = self._build_two_site_features()
+        out = harmonize_combat(df, sites, feature_cols)
+        for c in feature_cols:
+            assert out[c].dtype == np.float64, f"{c} → {out[c].dtype}"
+
+    def test_no_nan_in_output(self) -> None:
+        df, sites, feature_cols = self._build_two_site_features()
+        out = harmonize_combat(df, sites, feature_cols)
+        assert out[feature_cols].notna().all().all()
+        assert np.isfinite(out[feature_cols].to_numpy()).all()
+
+    def test_deterministic(self) -> None:
+        df, sites, feature_cols = self._build_two_site_features()
+        a = harmonize_combat(df, sites, feature_cols)
+        b = harmonize_combat(df.copy(), sites.copy(), list(feature_cols))
+        np.testing.assert_array_equal(a.to_numpy(), b.to_numpy())
+
+    def test_raises_on_single_site(self) -> None:
+        """ComBat needs at least 2 sites; a single-site dataset is malformed."""
+        df, _, feature_cols = self._build_two_site_features()
+        sites_one = pd.Series(["A"] * len(df), name="site")
+        with pytest.raises(ValueError, match="at least 2 sites"):
+            harmonize_combat(df, sites_one, feature_cols)
