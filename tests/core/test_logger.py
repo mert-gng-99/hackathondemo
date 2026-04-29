@@ -26,8 +26,39 @@ def test_get_logger_default_level_is_info() -> None:
     assert logger.level == logging.INFO
 
 
-def test_get_logger_emits_formatted_record(caplog) -> None:
-    logger = get_logger("neurobridge.emit")
-    with caplog.at_level(logging.INFO, logger="neurobridge.emit"):
+def test_get_logger_emits_record_to_handler_stream() -> None:
+    """The logger writes records through its StreamHandler."""
+    import io
+
+    logger = get_logger("neurobridge.emit_capture")
+    handler = logger.handlers[0]
+    buf = io.StringIO()
+    original_stream = handler.stream
+    handler.stream = buf
+    try:
         logger.info("hello-world")
-    assert any("hello-world" in record.message for record in caplog.records)
+    finally:
+        handler.stream = original_stream
+
+    output = buf.getvalue()
+    assert "hello-world" in output
+
+
+def test_get_logger_format_includes_level_and_name() -> None:
+    """Format string must include level and logger name (per AGENTS.md §3 traceability)."""
+    import io
+
+    logger = get_logger("neurobridge.format_check")
+    handler = logger.handlers[0]
+    buf = io.StringIO()
+    original_stream = handler.stream
+    handler.stream = buf
+    try:
+        logger.info("payload")
+    finally:
+        handler.stream = original_stream
+
+    output = buf.getvalue()
+    assert "INFO" in output
+    assert "neurobridge.format_check" in output
+    assert "payload" in output
