@@ -16,8 +16,14 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """Return a process-wide singleton logger for the given name.
 
-    Idempotent: repeated calls with the same name return the same Logger
-    instance and never stack duplicate handlers.
+    Idempotent on handler attachment: repeated calls with the same name
+    return the same Logger instance and never stack duplicate stdout
+    StreamHandlers. The most recent call wins on `level`, so callers can
+    raise/lower verbosity at runtime without rebuilding the logger.
+
+    Note on `propagate=False`: records do NOT bubble up to the root logger.
+    If a framework (FastAPI, Uvicorn, MLflow) needs to capture records via
+    a root handler in week-2 work, this default will need to be revisited.
 
     Args:
         name: Dotted logger name, conventionally `__name__`.
@@ -27,12 +33,13 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
         Configured `logging.Logger` writing to stdout.
     """
     logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
-
-    handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT))
-    logger.addHandler(handler)
     logger.setLevel(level)
     logger.propagate = False
+    if not any(
+        isinstance(h, logging.StreamHandler) and h.stream is sys.stdout
+        for h in logger.handlers
+    ):
+        handler = logging.StreamHandler(stream=sys.stdout)
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT))
+        logger.addHandler(handler)
     return logger

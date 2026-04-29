@@ -62,3 +62,33 @@ def test_get_logger_format_includes_level_and_name() -> None:
     assert "INFO" in output
     assert "neurobridge.format_check" in output
     assert "payload" in output
+
+
+def test_get_logger_respects_subsequent_level_change() -> None:
+    """The most recent call wins on level — fixes a silent no-op regression."""
+    name = "neurobridge.level_change"
+    first = get_logger(name, level=logging.INFO)
+    assert first.level == logging.INFO
+    second = get_logger(name, level=logging.DEBUG)
+    assert second is first  # still the same singleton
+    assert second.level == logging.DEBUG
+
+
+def test_get_logger_does_not_clobber_pre_attached_handlers() -> None:
+    """If a framework pre-attached a handler, we still apply our config."""
+    name = "neurobridge.pre_attached"
+    pre_existing = logging.NullHandler()
+    logging.getLogger(name).addHandler(pre_existing)
+
+    logger = get_logger(name)
+
+    # Our stdout StreamHandler was added alongside the pre-existing handler.
+    assert pre_existing in logger.handlers
+    assert any(
+        isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is not None
+        and h is not pre_existing
+        for h in logger.handlers
+    )
+    # And our config (level + propagate) actually took effect.
+    assert logger.level == logging.INFO
+    assert logger.propagate is False
