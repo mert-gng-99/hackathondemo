@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from rdkit import Chem, RDLogger
+from rdkit.Chem import AllChem
+from rdkit.DataStructs import ConvertToNumpyArray
 
 from src.core.logger import get_logger
 
@@ -42,3 +45,34 @@ def is_valid_smiles(smiles: str | float | None) -> bool:
     if not isinstance(smiles, str) or not smiles.strip():
         return False
     return Chem.MolFromSmiles(smiles) is not None
+
+
+def compute_morgan_fingerprint(
+    smiles: str,
+    n_bits: int = 2048,
+    radius: int = 2,
+) -> np.ndarray:
+    """Compute the Morgan (ECFP-like) circular fingerprint for a SMILES.
+
+    Args:
+        smiles: A SMILES string already known to be valid. Pass through
+            `is_valid_smiles` first if the source is untrusted.
+        n_bits: Length of the bit vector. 2048 is the de-facto default
+            for downstream scikit-learn classifiers.
+        radius: Morgan radius (2 ≈ ECFP4).
+
+    Returns:
+        A 1-D `np.ndarray` of length `n_bits` and dtype `uint8`, where
+        each element is 0 or 1.
+
+    Raises:
+        ValueError: if `smiles` cannot be parsed by RDKit.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"invalid SMILES: {smiles!r}")
+
+    bit_vect = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
+    arr = np.zeros((n_bits,), dtype=np.uint8)
+    ConvertToNumpyArray(bit_vect, arr)
+    return arr
