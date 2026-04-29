@@ -21,6 +21,9 @@ data/processed/*
 mlruns/
 mlartifacts/
 
+# Claude Code / agent tooling
+.sixth/
+
 # IDE
 .idea/
 .vscode/
