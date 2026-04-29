@@ -189,3 +189,17 @@ class TestExtractFeaturesFromVolume:
         a = extract_features_from_volume(vol, mask)
         b = extract_features_from_volume(vol, mask)
         assert a == b
+
+    def test_roi_stats_labels_and_funcs_stay_in_sync(self) -> None:
+        """ROI_STATS labels must equal the names in _ROI_STATS_FUNCS — single source of truth."""
+        from src.pipelines.mri_pipeline import _ROI_STATS_FUNCS
+
+        derived_names = tuple(name for name, _ in _ROI_STATS_FUNCS)
+        assert derived_names == ROI_STATS
+
+    def test_raises_on_shape_mismatch(self) -> None:
+        """volume.shape and mask.shape must agree — the contract is enforced."""
+        vol = np.zeros((8, 8, 8), dtype=np.float64)
+        bad_mask = np.zeros((4, 4, 4), dtype=bool)
+        with pytest.raises(ValueError, match=r"volume\.shape .* != mask\.shape"):
+            extract_features_from_volume(vol, bad_mask)

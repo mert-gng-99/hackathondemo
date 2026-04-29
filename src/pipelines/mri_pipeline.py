@@ -98,7 +98,6 @@ def mask_brain(
 # Default ROI partition: split a (D, H, W) volume into 2×2×2 = 8 octant ROIs.
 # Octant index follows binary (z, y, x) ordering: 0..7.
 DEFAULT_N_ROI_AXES: tuple[int, int, int] = (2, 2, 2)
-ROI_STATS: tuple[str, ...] = ("mean", "std", "p10", "p50", "p90", "voxel_count")
 
 
 def _roi_slices(
@@ -123,18 +122,32 @@ def _roi_slices(
     return out
 
 
+# Statistical functions, bound to their column-label names. The `ROI_STATS`
+# tuple below is derived from this list so labels and computations cannot
+# drift out of sync (a class of bug the prior parallel-list design was
+# vulnerable to — same pattern as EEG's _STATS_FUNCS).
+#
+# `mean`/`std` use NumPy with `ddof=0` (biased / population estimators).
+# `p10`/`p50`/`p90` use `np.percentile` default linear interpolation.
+# `voxel_count` is stored as float for column-uniformity in the eventual
+# Parquet, but always represents a whole number (assertable via
+# `v == float(int(v))`).
+_ROI_STATS_FUNCS: tuple[tuple[str, "object"], ...] = (
+    ("mean", lambda v: float(v.mean())),
+    ("std", lambda v: float(v.std())),
+    ("p10", lambda v: float(np.percentile(v, 10))),
+    ("p50", lambda v: float(np.percentile(v, 50))),
+    ("p90", lambda v: float(np.percentile(v, 90))),
+    ("voxel_count", lambda v: float(v.size)),
+)
+ROI_STATS: tuple[str, ...] = tuple(name for name, _ in _ROI_STATS_FUNCS)
+
+
 def _roi_stats_for(values: np.ndarray) -> dict[str, float]:
-    """Compute the 6 ROI stats. Empty array → all 0.0 (no-NaN contract)."""
+    """Compute the ROI stats. Empty array → all 0.0 (no-NaN contract)."""
     if values.size == 0:
-        return {stat: 0.0 for stat in ROI_STATS}
-    return {
-        "mean": float(values.mean()),
-        "std": float(values.std()),
-        "p10": float(np.percentile(values, 10)),
-        "p50": float(np.percentile(values, 50)),
-        "p90": float(np.percentile(values, 90)),
-        "voxel_count": float(values.size),
-    }
+        return {name: 0.0 for name, _ in _ROI_STATS_FUNCS}
+    return {name: fn(values) for name, fn in _ROI_STATS_FUNCS}
 
 
 def extract_features_from_volume(
@@ -150,6 +163,13 @@ def extract_features_from_volume(
     90th percentile / voxel count. Empty ROIs (no mask voxels) report all
     zeros so the resulting Parquet has no NaN values.
 
+    Statistical conventions:
+      - ``mean`` / ``std`` use ``ddof=0`` (biased / population estimators).
+      - ``p10`` / ``p50`` / ``p90`` use ``np.percentile`` with the default
+        linear interpolation.
+      - ``voxel_count`` is stored as float for column uniformity but always
+        represents a whole number.
+
     Args:
         volume: 3-D numeric `np.ndarray` (already validated).
         mask: Boolean `np.ndarray` of the same shape (from `mask_brain`).
@@ -158,7 +178,15 @@ def extract_features_from_volume(
     Returns:
         Flat dict `{"feat_roi{i}_{stat}": float}` of length
         ``prod(n_roi_axes) * len(ROI_STATS)``.
+
+    Raises:
+        ValueError: if `volume.shape` and `mask.shape` differ.
     """
+    if volume.shape != mask.shape:
+        raise ValueError(
+            f"volume.shape {volume.shape} != mask.shape {mask.shape}"
+        )
+
     feats: dict[str, float] = {}
     slices = _roi_slices(volume.shape, n_roi_axes)
     for i, sl in enumerate(slices):
