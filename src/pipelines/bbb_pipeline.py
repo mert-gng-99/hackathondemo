@@ -26,7 +26,7 @@ from src.core.storage import write_parquet
 logger = get_logger(__name__)
 
 # Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
-# (AGENTS.md §4 rule 3) holds across hardware.
+# (AGENTS.md §4 rule 3) holds across hardware. See src.core.determinism.
 pin_threads()
 
 # Suppress RDKit's noisy C++-level warning stream; we surface our own
