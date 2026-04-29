@@ -25,6 +25,7 @@ import numpy as np
 
 SITE_A_BIAS = 0.0
 SITE_B_BIAS = 5.0
+_SITE_BIAS: dict[str, float] = {"A": SITE_A_BIAS, "B": SITE_B_BIAS}
 VOLUME_SHAPE = (8, 8, 8)
 SUBJECTS = (
     ("subject_0", "A"),
@@ -51,6 +52,26 @@ def _spherical_brain(rng: np.random.Generator, bias: float) -> np.ndarray:
 
 
 def build(out_dir: Path | None = None) -> Path:
+    """Generate the MRI fixture and write all 7 artifacts to ``out_dir``.
+
+    The output directory will contain six 8×8×8 NIfTI volumes
+    (``subject_0.nii.gz`` through ``subject_5.nii.gz``) and a ``sites.csv``
+    file with columns ``subject_id, site``. Files are byte-deterministic
+    given a fixed nibabel version (see module-level NOTE).
+
+    Args:
+        out_dir: Target directory. Defaults to ``tests/fixtures/mri_sample/``
+            resolved relative to this script (so CWD-independent).
+
+    Returns:
+        The resolved output directory path.
+
+    Raises:
+        KeyError: if ``SUBJECTS`` lists a site label not present in
+            ``_SITE_BIAS``. This is a fail-fast guard that prevents a
+            silent fall-through when adding a new site without updating
+            ``_SITE_BIAS``.
+    """
     out = out_dir if out_dir is not None else Path(__file__).parent / "mri_sample"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -59,7 +80,7 @@ def build(out_dir: Path | None = None) -> Path:
 
     sites_rows: list[tuple[str, str]] = []
     for subject_id, site in SUBJECTS:
-        bias = SITE_A_BIAS if site == "A" else SITE_B_BIAS
+        bias = _SITE_BIAS[site]
         volume = _spherical_brain(rng, bias=bias)
         img = nib.Nifti1Image(volume, affine=affine)
         nib.save(img, out / f"{subject_id}.nii.gz")
