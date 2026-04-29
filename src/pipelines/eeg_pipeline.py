@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Callable
 
 import mne
 import numpy as np
@@ -215,8 +216,8 @@ def _band_power(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> flo
 # `STATS` tuple below is derived from this list so labels and computations
 # can never drift out of sync (a class of bug the original parallel-list
 # design was vulnerable to).
-_STATS_FUNCS: tuple[tuple[str, "_StatFn"], ...]  # populated below
-_StatFn = "callable that maps a 1-D channel array to a single float"
+_StatFn = Callable[[np.ndarray], float]
+_STATS_FUNCS: tuple[tuple[str, _StatFn], ...]  # populated below
 
 
 def _stat_mean(x: np.ndarray) -> float:

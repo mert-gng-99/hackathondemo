@@ -75,11 +75,12 @@ Result lives at `data/processed/mri_features.parquet` (48 ROI features per subje
 │   ├── core/logger.py        # Shared structured logger (mandatory in every pipeline)
 │   ├── pipelines/
 │   │   ├── bbb_pipeline.py   # Day-1 pipeline (4 public funcs + CLI entry)
-│   │   └── eeg_pipeline.py   # Day-2 pipeline (6 public funcs + CLI entry)
+│   │   ├── eeg_pipeline.py   # Day-2 pipeline (6 public funcs + CLI entry)
+│   │   └── mri_pipeline.py   # Day-3 pipeline (5 public funcs + CLI entry)
 │   └── api/                  # FastAPI surface (placeholder until Day 4+)
 └── tests/
     ├── core/, pipelines/     # Mirror src/ structure
-    └── fixtures/             # bbbp_sample.csv (6 rows for smoke tests)
+    └── fixtures/          # bbbp_sample.csv, eeg_sample.fif, mri_sample/ + build_*.py
 ```
 
 ## BBB Pipeline (Day 1)
@@ -129,10 +130,10 @@ for the `float64` EEG features Day 2 produces. See AGENTS.md §6.
 
 ## Testing & TDD
 
-All four BBB functions and the shared logger were built TDD-first (RED → GREEN →
+All pipeline functions and the shared logger were built TDD-first across Days 1–3 (RED → GREEN →
 REFACTOR). Each task ended in a green commit; review-and-fix loops landed as separate
 commits with `fix:` / `refactor:` prefixes. Run `pytest -v` at any time — the full suite
-finishes in under 2 seconds on a 2024 laptop.
+finishes in under 4 seconds on a 2024 laptop.
 
 ## Roadmap
 
@@ -145,7 +146,9 @@ finishes in under 2 seconds on a 2024 laptop.
 
 - **Project rules (mandatory reading for any agent):** [`AGENTS.md`](AGENTS.md)
 - **Day-1 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md`](docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md)
-- **Day-2 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-29-neurobridge-day2-eeg-pipeline.md`](docs/superpowers/plans/2026-04-29-neurobridge-day2-eeg-pipeline.md)
+- **Day-2 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-30-day2-eeg-mne-ica-pipeline.md`](docs/superpowers/plans/2026-04-30-day2-eeg-mne-ica-pipeline.md)
 - **Logger contract:** [`src/core/logger.py`](src/core/logger.py) + [`tests/core/test_logger.py`](tests/core/test_logger.py)
 - **BBB pipeline:** [`src/pipelines/bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) + [`tests/pipelines/test_bbb_pipeline.py`](tests/pipelines/test_bbb_pipeline.py)
 - **EEG pipeline:** [`src/pipelines/eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) + [`tests/pipelines/test_eeg_pipeline.py`](tests/pipelines/test_eeg_pipeline.py)
+- **Day-3 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-01-day3-mri-combat-pipeline.md`](docs/superpowers/plans/2026-05-01-day3-mri-combat-pipeline.md)
+- **MRI pipeline:** [`src/pipelines/mri_pipeline.py`](src/pipelines/mri_pipeline.py) + [`tests/pipelines/test_mri_pipeline.py`](tests/pipelines/test_mri_pipeline.py)
