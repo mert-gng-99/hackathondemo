@@ -59,7 +59,8 @@ def compute_morgan_fingerprint(
             `is_valid_smiles` first if the source is untrusted.
         n_bits: Length of the bit vector. 2048 is the de-facto default
             for downstream scikit-learn classifiers.
-        radius: Morgan radius (2 ≈ ECFP4).
+        radius: Morgan radius (2 ≈ ECFP4). Passed to RDKit's modern
+            MorganGenerator API.
 
     Returns:
         A 1-D `np.ndarray` of length `n_bits` and dtype `uint8`, where
@@ -72,7 +73,8 @@ def compute_morgan_fingerprint(
     if mol is None:
         raise ValueError(f"invalid SMILES: {smiles!r}")
 
-    bit_vect = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
+    generator = AllChem.GetMorganGenerator(radius=radius, fpSize=n_bits)
+    bit_vect = generator.GetFingerprint(mol)
     arr = np.zeros((n_bits,), dtype=np.uint8)
     ConvertToNumpyArray(bit_vect, arr)
     return arr

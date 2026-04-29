@@ -3,10 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from src.pipelines.bbb_pipeline import is_valid_smiles
+from src.pipelines.bbb_pipeline import (
+    compute_morgan_fingerprint,
+    is_valid_smiles,
+)
 
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "bbbp_sample.csv"
@@ -31,11 +35,6 @@ class TestIsValidSmiles:
     def test_rejects_nan(self) -> None:
         import math
         assert is_valid_smiles(math.nan) is False
-
-
-import numpy as np
-
-from src.pipelines.bbb_pipeline import compute_morgan_fingerprint
 
 
 class TestComputeMorganFingerprint:
