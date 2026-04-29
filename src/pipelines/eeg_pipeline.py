@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import mne
 import numpy as np
+import pandas as pd
 from mne.preprocessing import ICA
 from scipy import signal as scipy_signal
 from scipy import stats as scipy_stats
@@ -127,6 +128,18 @@ def remove_artifacts_with_ica(
         logger.warning(
             "ICA skipped: eog_ch_name=%r not found in channels %s",
             eog_ch_name, out.ch_names,
+        )
+        return out
+
+    # Guard: ICA.fit cannot handle NaN/inf in the data (scipy SVD will raise).
+    # If the raw contains non-finite samples, skip ICA so the NaN propagates
+    # to the epoch-level validity check in extract_features_from_recording
+    # where it will be cleanly dropped with a WARNING.
+    eeg_picks_check = mne.pick_types(out.info, eeg=True, meg=False)
+    if not np.all(np.isfinite(out.get_data(picks=eeg_picks_check))):
+        logger.warning(
+            "ICA skipped: EEG data contains NaN/inf values; "
+            "invalid epochs will be dropped downstream"
         )
         return out
 
@@ -262,3 +275,118 @@ def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
         for _name, fn in _STATS_FUNCS:
             feats.append(fn(x))
     return np.asarray(feats, dtype=np.float64)
+
+
+def _build_feature_columns(eeg_ch_names: list[str]) -> list[str]:
+    """Generate the deterministic, in-channel-order column ordering."""
+    cols: list[str] = []
+    for ch in eeg_ch_names:
+        for band in EEG_BANDS:
+            cols.append(f"feat_{ch}_psd_{band}")
+        for stat in STATS:
+            cols.append(f"feat_{ch}_{stat}")
+    return cols
+
+
+def extract_features_from_recording(
+    raw: mne.io.BaseRaw,
+    epoch_duration_s: float = 2.0,
+    eog_ch_name: str | None = None,
+    n_components: int = 15,
+    random_state: int = 97,
+) -> pd.DataFrame:
+    """Run the EEG pipeline on a Raw and return a 2-D feature DataFrame.
+
+    Steps:
+      1. Bandpass filter (1-40 Hz).
+      2. ICA-based EOG artifact rejection (skipped if `eog_ch_name` is None).
+      3. Slice into fixed-duration epochs.
+      4. Drop any epoch with NaN/inf samples (logged WARNING).
+      5. Compute features per epoch and stack into a DataFrame whose columns
+         are `feat_<channel>_psd_<band>` and `feat_<channel>_<stat>`.
+
+    Args:
+        raw: Loaded `mne.io.BaseRaw` (must be `.load_data()`'d).
+        epoch_duration_s: Length of each fixed-duration epoch in seconds.
+        eog_ch_name: Name of EOG reference channel for ICA. None disables ICA.
+        n_components: Cap on ICA components.
+        random_state: Seed for ICA's solver (determinism).
+
+    Returns:
+        A `pd.DataFrame` with one row per valid epoch and ``n_eeg_channels *
+        (len(EEG_BANDS) + len(STATS))`` ``feat_*`` columns.
+    """
+    # Pre-screen epochs on the original (unfiltered) raw data so that NaN/inf
+    # values injected into one epoch window do not spread across the full signal
+    # via the bandpass convolution and invalidate neighbouring epochs.
+    sfreq = float(raw.info["sfreq"])
+    n_samples_per_epoch = int(round(epoch_duration_s * sfreq))
+    pre_picks = mne.pick_types(raw.info, eeg=True, meg=False, eog=False)
+    pre_data = raw.get_data(picks=pre_picks)  # shape (n_eeg, n_times)
+    n_eeg, n_times = pre_data.shape
+    n_total_epochs = n_times // n_samples_per_epoch
+
+    valid_ep_indices: list[int] = []
+    invalid_indices: list[int] = []
+    for ep in range(n_total_epochs):
+        start = ep * n_samples_per_epoch
+        end = start + n_samples_per_epoch
+        epoch_pre = pre_data[:, start:end]
+        if is_valid_epoch(epoch_pre):
+            valid_ep_indices.append(ep)
+        else:
+            invalid_indices.append(ep)
+
+    # Only run the expensive filter + ICA pipeline if there is something to do.
+    feature_cols = _build_feature_columns(
+        [raw.ch_names[i] for i in pre_picks]
+    )
+
+    n_dropped = len(invalid_indices)
+    if n_dropped:
+        display = invalid_indices[:10]
+        suffix = (
+            f"... (+{n_dropped - 10} more)" if n_dropped > 10 else ""
+        )
+        logger.warning(
+            "Dropping %d/%d epochs with invalid samples (indices=%s%s)",
+            n_dropped, n_total_epochs, display, suffix,
+        )
+
+    if not valid_ep_indices:
+        logger.info(
+            "Feature extraction complete: in=%d, out=0, dropped=%d (%.2f%%)",
+            n_total_epochs, n_dropped,
+            100.0 * n_dropped / max(n_total_epochs, 1),
+        )
+        return pd.DataFrame(columns=feature_cols).astype(np.float64)
+
+    filtered = bandpass_filter(raw, l_freq=1.0, h_freq=40.0)
+    cleaned = remove_artifacts_with_ica(
+        filtered,
+        eog_ch_name=eog_ch_name,
+        n_components=n_components,
+        random_state=random_state,
+    )
+
+    eeg_picks = mne.pick_types(cleaned.info, eeg=True, meg=False, eog=False)
+    eeg_names = [cleaned.ch_names[i] for i in eeg_picks]
+    data = cleaned.get_data(picks=eeg_picks)  # shape (n_eeg, n_times)
+    # Rebuild feature_cols using post-ICA channel order (should match pre_picks).
+    feature_cols = _build_feature_columns(eeg_names)
+
+    rows: list[np.ndarray] = []
+    for ep in valid_ep_indices:
+        start = ep * n_samples_per_epoch
+        end = start + n_samples_per_epoch
+        epoch = data[:, start:end]
+        rows.append(compute_features_from_epoch(epoch, sfreq=sfreq))
+
+    matrix = np.vstack(rows)
+    out = pd.DataFrame(matrix, columns=feature_cols, dtype=np.float64)
+    logger.info(
+        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
+        n_total_epochs, len(out), n_dropped,
+        100.0 * n_dropped / max(n_total_epochs, 1),
+    )
+    return out

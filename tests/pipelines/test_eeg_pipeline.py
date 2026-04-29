@@ -5,11 +5,13 @@ from pathlib import Path
 
 import mne
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.pipelines.eeg_pipeline import (
     bandpass_filter,
     compute_features_from_epoch,
+    extract_features_from_recording,
     is_valid_epoch,
     remove_artifacts_with_ica,
 )
@@ -226,3 +228,72 @@ class TestComputeFeaturesFromEpoch:
 
         derived_names = tuple(name for name, _ in _STATS_FUNCS)
         assert derived_names == STATS
+
+
+class TestExtractFeaturesFromRecording:
+    def _load(self) -> mne.io.BaseRaw:
+        return mne.io.read_raw_fif(FIXTURE, preload=True, verbose="ERROR")
+
+    def test_returns_dataframe(self) -> None:
+        raw = self._load()
+        df = extract_features_from_recording(
+            raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        assert isinstance(df, pd.DataFrame)
+
+    def test_row_count_matches_epochs(self) -> None:
+        """10 s recording / 2 s epoch = 5 epochs."""
+        raw = self._load()
+        df = extract_features_from_recording(
+            raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        assert len(df) == 5
+
+    def test_column_naming_is_deterministic_and_explicit(self) -> None:
+        raw = self._load()
+        df = extract_features_from_recording(
+            raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        # 4 EEG channels: Cz, Pz, O1, O2 (EOG channel is excluded from features).
+        for ch in ("Cz", "Pz", "O1", "O2"):
+            for band in EEG_BANDS:
+                assert f"feat_{ch}_psd_{band}" in df.columns
+            for stat in STATS:
+                assert f"feat_{ch}_{stat}" in df.columns
+
+    def test_no_feat_for_eog_channel(self) -> None:
+        raw = self._load()
+        df = extract_features_from_recording(
+            raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        assert not any("EOG061" in c for c in df.columns)
+
+    def test_all_features_finite_float64(self) -> None:
+        raw = self._load()
+        df = extract_features_from_recording(
+            raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        feat_cols = [c for c in df.columns if c.startswith("feat_")]
+        assert all(df[c].dtype == np.float64 for c in feat_cols)
+        assert df[feat_cols].notna().all().all()
+        assert np.isfinite(df[feat_cols].to_numpy()).all()
+
+    def test_drops_invalid_epochs_with_warning(self) -> None:
+        """If an epoch contains NaN, it is logged and dropped."""
+        raw = self._load()
+        # Inject a NaN into the last 2-second window so that exactly one epoch
+        # fails `is_valid_epoch`.
+        data = raw.get_data().copy()
+        data[0, -10] = np.nan
+        bad_raw = mne.io.RawArray(data, raw.info, verbose="ERROR")
+        df = extract_features_from_recording(
+            bad_raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        # 5 epochs minus 1 dropped = 4
+        assert len(df) == 4
