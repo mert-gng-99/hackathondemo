@@ -541,7 +541,16 @@ def remove_artifacts_with_ica(
         verbose="ERROR",
     )
     ica.fit(out, picks="eeg", verbose="ERROR")
-    bad_idx, _ = ica.find_bads_eog(out, ch_name=eog_ch_name, verbose="ERROR")
+    # Use raw correlation (not z-score) so we can reliably flag artifact
+    # components on small recordings where n_components < 10 makes the
+    # default z-score threshold algebraically unreachable.
+    bad_idx, _ = ica.find_bads_eog(
+        out,
+        ch_name=eog_ch_name,
+        measure="correlation",
+        threshold=0.9,
+        verbose="ERROR",
+    )
     ica.exclude = list(bad_idx)
     logger.info(
         "ICA fit: n_components=%d, EOG-correlated rejected=%d",
