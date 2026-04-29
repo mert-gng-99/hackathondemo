@@ -30,6 +30,8 @@ class TestIsValidEpoch:
         epoch = np.zeros((4, 256))
         epoch[1, 5] = np.inf
         assert is_valid_epoch(epoch) is False
+        epoch[1, 5] = -np.inf
+        assert is_valid_epoch(epoch) is False
 
     def test_rejects_empty(self) -> None:
         assert is_valid_epoch(np.zeros((0, 256))) is False
@@ -38,3 +40,8 @@ class TestIsValidEpoch:
     def test_rejects_non_array(self) -> None:
         assert is_valid_epoch([[1, 2, 3]]) is False
         assert is_valid_epoch(None) is False
+
+    def test_rejects_non_numeric_dtype(self) -> None:
+        """String / object dtype arrays must be rejected without raising."""
+        epoch = np.array([["a", "b"], ["c", "d"]])
+        assert is_valid_epoch(epoch) is False

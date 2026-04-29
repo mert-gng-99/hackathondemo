@@ -19,18 +19,20 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 
-def is_valid_epoch(epoch: object) -> bool:
-    """Return True iff `epoch` is a non-empty 2-D float array with no NaN/inf.
+def is_valid_epoch(epoch: np.ndarray | None) -> bool:
+    """Return True iff `epoch` is a non-empty 2-D numeric array with no NaN/inf.
 
-    Used to drop corrupted segments before feature extraction. Defensive
-    against the full set of garbage we expect from real recordings: lists,
-    None, NaN/inf samples, zero-sized arrays.
+    The annotation is the *expected* input class; the implementation defensively
+    rejects any other garbage (lists, scalars, string dtypes, zero-sized arrays)
+    without raising — matching the BBB pipeline's `is_valid_smiles` pattern.
     """
     if not isinstance(epoch, np.ndarray):
         return False
     if epoch.ndim != 2:
         return False
     if epoch.size == 0:
+        return False
+    if not np.issubdtype(epoch.dtype, np.number):
         return False
     if not np.all(np.isfinite(epoch)):
         return False
