@@ -93,3 +93,46 @@ class TestExtractFeaturesFromDataFrame:
         raw = pd.read_csv(FIXTURE)
         features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
         assert list(features.index) == list(range(len(features)))
+
+    def test_raises_key_error_on_missing_smiles_col(self) -> None:
+        df = pd.DataFrame({"foo": [1, 2, 3]})
+        with pytest.raises(KeyError, match="missing required column 'smiles'"):
+            extract_features_from_dataframe(df, smiles_col="smiles", n_bits=64)
+
+    def test_returns_empty_dataframe_when_all_invalid(self) -> None:
+        """All-invalid input must produce a typed empty result, not crash."""
+        df = pd.DataFrame(
+            {
+                "p_np": [0, 0],
+                "smiles": ["", "still_garbage"],
+            }
+        )
+        out = extract_features_from_dataframe(df, smiles_col="smiles", n_bits=32)
+        assert len(out) == 0
+        assert "p_np" in out.columns
+        assert sum(c.startswith("fp_") for c in out.columns) == 32
+        assert "smiles" not in out.columns
+
+    def test_emits_warning_and_info_logs(self) -> None:
+        """AGENTS.md §4 traceability: log invalid drops + in/out/dropped counts."""
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import bbb_pipeline as mod
+
+        # Swap the module logger's stream so we can capture output.
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            df = pd.read_csv(FIXTURE)
+            extract_features_from_dataframe(df, smiles_col="smiles", n_bits=32)
+        finally:
+            handler.stream = original_stream
+
+        output = buf.getvalue()
+        assert "Dropping 2/6 rows with invalid SMILES" in output
+        assert "Feature extraction complete: in=6, out=4, dropped=2" in output

@@ -81,6 +81,25 @@ def compute_morgan_fingerprint(
     return arr
 
 
+def _compute_fingerprint_matrix(
+    valid_smiles: list[str],
+    n_bits: int,
+    radius: int,
+) -> np.ndarray:
+    """Stack Morgan fingerprints into a (N, n_bits) uint8 matrix.
+
+    Caller must guarantee `valid_smiles` is non-empty and every entry has
+    already passed `is_valid_smiles`.
+    """
+    return np.stack(
+        [
+            compute_morgan_fingerprint(s, n_bits=n_bits, radius=radius)
+            for s in valid_smiles
+        ],
+        axis=0,
+    )
+
+
 def extract_features_from_dataframe(
     df: pd.DataFrame,
     smiles_col: str = "smiles",
@@ -96,6 +115,10 @@ def extract_features_from_dataframe(
       3. Expand the bit vector into `n_bits` integer columns named
          `fp_0 ... fp_{n_bits - 1}` and concatenate with the surviving
          non-SMILES metadata.
+
+    On empty input or when every row is invalid, returns a DataFrame with
+    the expected columns and zero rows (rather than raising), so callers
+    downstream see a well-typed result instead of an exception.
 
     Args:
         df: Raw DataFrame; must contain `smiles_col`.
@@ -113,30 +136,40 @@ def extract_features_from_dataframe(
     if smiles_col not in df.columns:
         raise KeyError(f"DataFrame is missing required column {smiles_col!r}")
 
+    fp_columns = [f"fp_{i}" for i in range(n_bits)]
+    metadata_columns = [c for c in df.columns if c != smiles_col]
+
     n_total = len(df)
     valid_mask = df[smiles_col].apply(is_valid_smiles)
     n_invalid = int((~valid_mask).sum())
 
     if n_invalid:
         invalid_indices = df.index[~valid_mask].tolist()
+        display = invalid_indices[:10]
+        suffix = (
+            f"... (+{len(invalid_indices) - 10} more)"
+            if len(invalid_indices) > 10
+            else ""
+        )
         logger.warning(
-            "Dropping %d/%d rows with invalid SMILES (indices=%s)",
-            n_invalid, n_total, invalid_indices,
+            "Dropping %d/%d rows with invalid SMILES (indices=%s%s)",
+            n_invalid, n_total, display, suffix,
         )
 
     valid_df = df.loc[valid_mask].reset_index(drop=True)
 
-    fingerprints = np.stack(
-        [
-            compute_morgan_fingerprint(s, n_bits=n_bits, radius=radius)
-            for s in valid_df[smiles_col].tolist()
-        ],
-        axis=0,
-    )
-    fp_columns = [f"fp_{i}" for i in range(n_bits)]
-    fp_df = pd.DataFrame(fingerprints, columns=fp_columns, dtype=np.uint8)
+    if len(valid_df) == 0:
+        logger.info(
+            "Feature extraction complete: in=%d, out=0, dropped=%d (%.2f%%)",
+            n_total, n_invalid, 100.0 * n_invalid / max(n_total, 1),
+        )
+        return pd.DataFrame(columns=metadata_columns + fp_columns)
 
-    metadata = valid_df.drop(columns=[smiles_col]).reset_index(drop=True)
+    fingerprints = _compute_fingerprint_matrix(
+        valid_df[smiles_col].tolist(), n_bits=n_bits, radius=radius,
+    )
+    fp_df = pd.DataFrame(fingerprints, columns=fp_columns, dtype=np.uint8)
+    metadata = valid_df.drop(columns=[smiles_col])
     out = pd.concat([metadata, fp_df], axis=1)
 
     logger.info(
