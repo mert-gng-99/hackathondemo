@@ -224,6 +224,13 @@ def harmonize_combat(
     """
     from neuroHarmonize import harmonizationLearn
 
+    if not feature_cols:
+        raise ValueError("feature_cols must be a non-empty list")
+    if len(features) != len(sites):
+        raise ValueError(
+            f"features has {len(features)} rows but sites has {len(sites)} elements"
+        )
+
     if sites.nunique() < 2:
         raise ValueError(
             f"ComBat requires at least 2 sites; got {sites.nunique()} "
@@ -234,9 +241,13 @@ def harmonize_combat(
     covars = pd.DataFrame({"SITE": sites.to_numpy()})
 
     _, harmonized = harmonizationLearn(matrix, covars)
-    # Round to 14 decimal places to eliminate sub-ULP floating-point noise
-    # (neuroHarmonize's internal matrix ops can produce ±1-ULP variation
-    # across calls; 14 d.p. retains all meaningful precision at float64).
+    # Defensive: with OMP/OPENBLAS/MKL_NUM_THREADS=1 (set at module import,
+    # per AGENTS.md §4), harmonizationLearn is already bit-identical across
+    # calls. np.round(14) provides an additional determinism boundary for
+    # environments where those env pins are overridden before module load
+    # (e.g. a sub-process that re-exports a thread count). It discards ~5
+    # trailing-mantissa bits, which is well below ComBat's biological
+    # effect-size precision floor.
     out = pd.DataFrame(
         np.round(np.asarray(harmonized, dtype=np.float64), 14),
         columns=list(feature_cols),

@@ -272,3 +272,15 @@ class TestHarmonizeCombat:
         sites_one = pd.Series(["A"] * len(df), name="site")
         with pytest.raises(ValueError, match="at least 2 sites"):
             harmonize_combat(df, sites_one, feature_cols)
+
+    def test_raises_on_empty_feature_cols(self) -> None:
+        df, sites, _ = self._build_two_site_features()
+        with pytest.raises(ValueError, match="feature_cols must be a non-empty list"):
+            harmonize_combat(df, sites, [])
+
+    def test_raises_on_length_mismatch(self) -> None:
+        df, sites, feature_cols = self._build_two_site_features()
+        # sites has 6 entries; truncate to 5 to force a mismatch.
+        bad_sites = sites.iloc[:5]
+        with pytest.raises(ValueError, match=r"features has 6 rows but sites has 5 elements"):
+            harmonize_combat(df, bad_sites, feature_cols)

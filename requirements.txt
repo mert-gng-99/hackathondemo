@@ -1,4 +1,4 @@
-# Requires Python 3.10–3.12 (rdkit / numpy / pandas / pyarrow / scipy / scikit-learn pins ship cp310–cp312 wheels only).
+# Requires Python 3.10–3.12 (rdkit / numpy / pandas / pyarrow / scipy / scikit-learn / statsmodels pins ship cp310–cp312 wheels only).
 # See AGENTS.md §3 for the full coding-standards contract.
 
 # --- Web / API layer ---
@@ -22,6 +22,8 @@ mne==1.7.1
 # --- Modality: image (MRI pipeline) ---
 nibabel==5.2.1
 neuroharmonize==2.4.5  # ComBat harmonization wrapper
+neuroCombat==0.2.12  # transitive dep of neuroharmonize; pinned for reproducibility
+statsmodels==0.14.6  # transitive dep of neuroharmonize; pinned for reproducibility
 
 # --- Experiment tracking ---
 mlflow==2.16.0
