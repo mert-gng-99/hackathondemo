@@ -1,0 +1,12 @@
+.venv/
+.venv312/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+data/raw/*
+data/processed/*
+mlruns/
+.git/
+docs/
+tests/
