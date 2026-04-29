@@ -15,6 +15,8 @@ from __future__ import annotations
 import mne
 import numpy as np
 from mne.preprocessing import ICA
+from scipy import signal as scipy_signal
+from scipy import stats as scipy_stats
 
 from src.core.logger import get_logger
 
@@ -159,3 +161,57 @@ def remove_artifacts_with_ica(
     )
     ica.apply(out, verbose="ERROR")
     return out
+
+
+EEG_BANDS: dict[str, tuple[float, float]] = {
+    "delta": (1.0, 4.0),
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 13.0),
+    "beta":  (13.0, 30.0),
+    "gamma": (30.0, 40.0),
+}
+STATS: tuple[str, ...] = ("mean", "std", "var", "skew", "kurtosis")
+
+
+def _band_power(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> float:
+    """Mean PSD value within the [lo, hi) frequency band."""
+    mask = (freqs >= lo) & (freqs < hi)
+    if not mask.any():
+        return 0.0
+    return float(psd[mask].mean())
+
+
+def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
+    """Compute PSD-band + statistical features for one epoch.
+
+    Per channel, the feature block is:
+      [psd_delta, psd_theta, psd_alpha, psd_beta, psd_gamma,
+       mean, std, var, skew, kurtosis]
+    Channels are stacked in their input order. The resulting 1-D vector has
+    length ``n_channels * (len(EEG_BANDS) + len(STATS))``.
+
+    PSD is computed with Welch's method (`scipy.signal.welch`) at the
+    epoch's sample rate. Higher moments use `scipy.stats` with default
+    bias correction.
+
+    Args:
+        epoch: A 2-D array shape (n_channels, n_samples).
+        sfreq: Sampling rate in Hz.
+
+    Returns:
+        A 1-D `np.ndarray` of dtype float64.
+    """
+    n_channels, n_samples = epoch.shape
+    nperseg = min(256, n_samples)
+    feats: list[float] = []
+    for ch in range(n_channels):
+        x = epoch[ch]
+        freqs, psd = scipy_signal.welch(x, fs=sfreq, nperseg=nperseg)
+        for _band, (lo, hi) in EEG_BANDS.items():
+            feats.append(_band_power(freqs, psd, lo, hi))
+        feats.append(float(np.mean(x)))
+        feats.append(float(np.std(x)))
+        feats.append(float(np.var(x)))
+        feats.append(float(scipy_stats.skew(x)))
+        feats.append(float(scipy_stats.kurtosis(x)))
+    return np.asarray(feats, dtype=np.float64)

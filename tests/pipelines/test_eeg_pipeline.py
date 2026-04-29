@@ -9,12 +9,17 @@ import pytest
 
 from src.pipelines.eeg_pipeline import (
     bandpass_filter,
+    compute_features_from_epoch,
     is_valid_epoch,
     remove_artifacts_with_ica,
 )
 
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "eeg_sample.fif"
+
+
+EEG_BANDS = ("delta", "theta", "alpha", "beta", "gamma")
+STATS = ("mean", "std", "var", "skew", "kurtosis")
 
 
 class TestIsValidEpoch:
@@ -175,3 +180,42 @@ class TestRemoveArtifactsWithIca:
         np.testing.assert_allclose(out.get_data(), raw.get_data(), rtol=1e-6, atol=1e-12)
         log_output = buf.getvalue()
         assert "ICA skipped: eog_ch_name='EOG_DOES_NOT_EXIST' not found" in log_output
+
+
+class TestComputeFeaturesFromEpoch:
+    def test_returns_1d_float_array(self) -> None:
+        epoch = np.random.default_rng(0).standard_normal((4, 256))
+        out = compute_features_from_epoch(epoch, sfreq=256.0)
+        assert isinstance(out, np.ndarray)
+        assert out.ndim == 1
+        assert out.dtype == np.float64
+
+    def test_feature_count_matches_contract(self) -> None:
+        """Each channel contributes len(EEG_BANDS) PSD features + len(STATS) stats."""
+        n_channels = 4
+        epoch = np.random.default_rng(0).standard_normal((n_channels, 256))
+        out = compute_features_from_epoch(epoch, sfreq=256.0)
+        expected = n_channels * (len(EEG_BANDS) + len(STATS))
+        assert out.shape == (expected,)
+
+    def test_alpha_band_dominates_for_alpha_signal(self) -> None:
+        """Pure 10 Hz sine on 1 channel should put most PSD power in alpha (8-13 Hz)."""
+        sfreq = 256.0
+        t = np.arange(int(sfreq * 2.0)) / sfreq
+        signal = np.sin(2 * np.pi * 10.0 * t)[None, :]  # (1, n_samples)
+        out = compute_features_from_epoch(signal, sfreq=sfreq)
+        # Layout for n_channels=1: [psd_delta, psd_theta, psd_alpha, psd_beta, psd_gamma, mean, std, var, skew, kurtosis]
+        psd_block = out[: len(EEG_BANDS)]
+        alpha_idx = EEG_BANDS.index("alpha")
+        assert psd_block[alpha_idx] == psd_block.max()
+
+    def test_finite_output(self) -> None:
+        epoch = np.random.default_rng(0).standard_normal((4, 256))
+        out = compute_features_from_epoch(epoch, sfreq=256.0)
+        assert np.all(np.isfinite(out))
+
+    def test_deterministic_for_same_input(self) -> None:
+        epoch = np.random.default_rng(0).standard_normal((4, 256))
+        a = compute_features_from_epoch(epoch, sfreq=256.0)
+        b = compute_features_from_epoch(epoch, sfreq=256.0)
+        np.testing.assert_array_equal(a, b)
