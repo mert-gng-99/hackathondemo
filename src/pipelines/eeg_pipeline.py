@@ -12,11 +12,13 @@ a logged WARNING), determinism (seeded ICA + sklearn RNG), traceability
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import mne
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from mne.preprocessing import ICA
 from scipy import signal as scipy_signal
 from scipy import stats as scipy_stats
@@ -24,6 +26,15 @@ from scipy import stats as scipy_stats
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
+# (AGENTS.md §4 rule 3) holds across hardware. Without this, multi-threaded
+# floating-point reductions can reorder and produce non-bit-identical output.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+pa.set_cpu_count(1)
+pa.set_io_thread_count(1)
 
 # Pearson-correlation threshold for EOG-component rejection in ICA.
 # Real-world EOG components typically score 0.8-0.95 against the EOG channel;

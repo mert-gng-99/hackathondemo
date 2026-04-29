@@ -65,7 +65,8 @@ Result lives at `data/processed/eeg_features.parquet`.
 ├── src/
 │   ├── core/logger.py        # Shared structured logger (mandatory in every pipeline)
 │   ├── pipelines/
-│   │   └── bbb_pipeline.py   # Day-1 pipeline (4 public funcs + CLI entry)
+│   │   ├── bbb_pipeline.py   # Day-1 pipeline (4 public funcs + CLI entry)
+│   │   └── eeg_pipeline.py   # Day-2 pipeline (6 public funcs + CLI entry)
 │   └── api/                  # FastAPI surface (placeholder until Day 4+)
 └── tests/
     ├── core/, pipelines/     # Mirror src/ structure
@@ -103,7 +104,7 @@ The pipeline is seeded (`random_state=97`) and produces byte-identical Parquet o
 Pipeline outputs are written as Parquet files using the `pyarrow` engine with snappy
 compression. This preserves dtypes (`uint8` fingerprint columns stay `uint8` instead of
 widening to `int64` as CSV would do) and yields ~10× smaller files than CSV — material
-for the `float32` EEG features Day 2 will produce. See AGENTS.md §6.
+for the `float64` EEG features Day 2 produces. See AGENTS.md §6.
 
 ## Testing & TDD
 
@@ -124,5 +125,7 @@ finishes in under 2 seconds on a 2024 laptop.
 
 - **Project rules (mandatory reading for any agent):** [`AGENTS.md`](AGENTS.md)
 - **Day-1 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md`](docs/superpowers/plans/2026-04-29-neurobridge-day1-bootstrap-bbb-pipeline.md)
+- **Day-2 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-04-29-neurobridge-day2-eeg-pipeline.md`](docs/superpowers/plans/2026-04-29-neurobridge-day2-eeg-pipeline.md)
 - **Logger contract:** [`src/core/logger.py`](src/core/logger.py) + [`tests/core/test_logger.py`](tests/core/test_logger.py)
 - **BBB pipeline:** [`src/pipelines/bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) + [`tests/pipelines/test_bbb_pipeline.py`](tests/pipelines/test_bbb_pipeline.py)
+- **EEG pipeline:** [`src/pipelines/eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) + [`tests/pipelines/test_eeg_pipeline.py`](tests/pipelines/test_eeg_pipeline.py)

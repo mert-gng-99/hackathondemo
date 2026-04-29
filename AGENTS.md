@@ -16,7 +16,7 @@ The platform exposes three production pipelines behind a single FastAPI surface:
 
 | Modality | Pipeline | Core Technique |
 |---|---|---|
-| Image (MRI / fMRI) | `src/pipelines/mri_pipeline.py` | ComBat Harmonization for site-level domain shift |
+| Image (MRI / fMRI) | `src/pipelines/mri_pipeline.py` *(planned, Day 3)* | ComBat Harmonization for site-level domain shift |
 | Signal (EEG) | `src/pipelines/eeg_pipeline.py` | MNE-Python + ICA for artifact removal |
 | Tabular (BBB / molecules) | `src/pipelines/bbb_pipeline.py` | RDKit Morgan fingerprints from SMILES |
 
@@ -71,6 +71,13 @@ Every modality pipeline MUST guarantee, before writing to `data/processed/`:
 3. **Determinism** — given the same `data/raw/` input, the pipeline produces byte-identical `data/processed/` output. No wall-clock, no random seeds without explicit seeding.
 4. **Traceability** — log row count in, row count out, and percentage dropped at INFO level.
 5. **Idempotence** — re-running the pipeline overwrites `data/processed/` cleanly; no append, no partial writes.
+
+**Determinism environment**: byte-identical output requires deterministic
+floating-point reductions. Each pipeline module sets `OMP_NUM_THREADS=1`,
+`OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and pins pyarrow to
+single-threaded mode at import time. CI runners and developer machines do
+not need to set these manually — the pipeline modules handle it — but
+overriding them in the environment will break Determinism rule 3.
 
 A model training script is allowed to import from `data/processed/` only. If a
 training script references `data/raw/` directly, that is a bug and must be

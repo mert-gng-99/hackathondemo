@@ -11,10 +11,12 @@ traceability (row count in / out / dropped), and idempotent output.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import ConvertToNumpyArray
@@ -22,6 +24,15 @@ from rdkit.DataStructs import ConvertToNumpyArray
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
+# (AGENTS.md §4 rule 3) holds across hardware. Without this, multi-threaded
+# floating-point reductions can reorder and produce non-bit-identical output.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+pa.set_cpu_count(1)
+pa.set_io_thread_count(1)
 
 # Suppress RDKit's noisy C++-level warning stream; we surface our own
 # structured warnings via the project logger when a SMILES fails to parse.
