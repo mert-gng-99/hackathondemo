@@ -11,6 +11,7 @@ traceability (row count in / out / dropped), and idempotent output.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -177,3 +178,60 @@ def extract_features_from_dataframe(
         n_total, len(out), n_invalid, 100.0 * n_invalid / max(n_total, 1),
     )
     return out
+
+
+DEFAULT_INPUT = Path("data/raw/bbbp.csv")
+DEFAULT_OUTPUT = Path("data/processed/bbbp_features.csv")
+
+
+def run_pipeline(
+    input_path: Path = DEFAULT_INPUT,
+    output_path: Path = DEFAULT_OUTPUT,
+    smiles_col: str = "smiles",
+    n_bits: int = 2048,
+    radius: int = 2,
+) -> None:
+    """Run the BBB pipeline end-to-end: raw CSV → processed feature CSV.
+
+    Reads the Kaggle BBBP CSV at `input_path`, validates and converts
+    SMILES into Morgan fingerprints, and writes the model-ready table
+    to `output_path`. Output is overwritten on every run (idempotent).
+
+    Args:
+        input_path: Path to the raw BBBP CSV (must include `smiles_col`).
+        output_path: Where to write the processed feature CSV. Parent
+            directory is created if missing.
+        smiles_col: SMILES column name in the raw CSV.
+        n_bits: Morgan fingerprint length.
+        radius: Morgan radius.
+
+    Raises:
+        FileNotFoundError: if `input_path` does not exist.
+        KeyError: if `smiles_col` is missing from the CSV.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        raise FileNotFoundError(f"Raw BBBP file not found: {input_path}")
+
+    logger.info("Reading raw BBBP from %s", input_path)
+    df = pd.read_csv(input_path)
+    logger.info("Loaded %d rows, columns=%s", len(df), list(df.columns))
+
+    features = extract_features_from_dataframe(
+        df, smiles_col=smiles_col, n_bits=n_bits, radius=radius,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    features.to_csv(output_path, index=False)
+    logger.info(
+        "Wrote processed features to %s (rows=%d, cols=%d)",
+        output_path, len(features), features.shape[1],
+    )
+
+
+if __name__ == "__main__":
+    # Production-ready CLI entrypoint:
+    #   python -m src.pipelines.bbb_pipeline
+    run_pipeline()

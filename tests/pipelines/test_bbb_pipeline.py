@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from src.pipelines.bbb_pipeline import (
     compute_morgan_fingerprint,
     extract_features_from_dataframe,
     is_valid_smiles,
+    run_pipeline,
 )
 
 
@@ -136,3 +138,51 @@ class TestExtractFeaturesFromDataFrame:
         output = buf.getvalue()
         assert "Dropping 2/6 rows with invalid SMILES" in output
         assert "Feature extraction complete: in=6, out=4, dropped=2" in output
+
+
+class TestRunPipeline:
+    def test_end_to_end_writes_processed_csv(self, tmp_path: Path) -> None:
+        # Arrange: copy fixture into a synthetic raw layout.
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "bbbp.csv"
+        output_path = proc_dir / "bbbp_features.csv"
+        shutil.copy(FIXTURE, input_path)
+
+        # Act
+        run_pipeline(input_path=input_path, output_path=output_path, n_bits=128, radius=2)
+
+        # Assert: file exists
+        assert output_path.exists(), "pipeline must write processed CSV"
+
+        # Assert: content is correct
+        out = pd.read_csv(output_path)
+        assert len(out) == 4  # 6 raw - 2 invalid
+        assert "p_np" in out.columns
+        assert sum(c.startswith("fp_") for c in out.columns) == 128
+        assert "smiles" not in out.columns
+
+    def test_run_pipeline_is_idempotent(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "bbbp.csv"
+        output_path = proc_dir / "bbbp_features.csv"
+        shutil.copy(FIXTURE, input_path)
+
+        run_pipeline(input_path=input_path, output_path=output_path, n_bits=64, radius=2)
+        first_bytes = output_path.read_bytes()
+        run_pipeline(input_path=input_path, output_path=output_path, n_bits=64, radius=2)
+        second_bytes = output_path.read_bytes()
+
+        assert first_bytes == second_bytes, "pipeline output must be byte-deterministic"
+
+    def test_run_pipeline_raises_when_input_missing(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            run_pipeline(
+                input_path=tmp_path / "nope.csv",
+                output_path=tmp_path / "out.csv",
+            )
