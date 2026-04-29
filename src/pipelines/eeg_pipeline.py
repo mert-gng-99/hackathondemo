@@ -12,6 +12,8 @@ a logged WARNING), determinism (seeded ICA + sklearn RNG), traceability
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import mne
 import numpy as np
 import pandas as pd
@@ -28,6 +30,11 @@ logger = get_logger(__name__)
 # 0.9 is a conservative floor that avoids false positives at the cost of
 # missing weak artifacts. Lower (0.7-0.8) for noisier recordings.
 _EOG_CORR_THRESHOLD: float = 0.9
+
+
+# Default I/O paths for the EEG pipeline. Override via run_pipeline() args.
+DEFAULT_INPUT = Path("data/raw/eeg.fif")
+DEFAULT_OUTPUT = Path("data/processed/eeg_features.parquet")
 
 
 def is_valid_epoch(epoch: np.ndarray | None) -> bool:
@@ -390,3 +397,77 @@ def extract_features_from_recording(
         100.0 * n_dropped / max(n_total_epochs, 1),
     )
     return out
+
+
+def run_pipeline(
+    input_path: Path = DEFAULT_INPUT,
+    output_path: Path = DEFAULT_OUTPUT,
+    epoch_duration_s: float = 2.0,
+    eog_ch_name: str | None = None,
+    n_components: int = 15,
+    random_state: int = 97,
+) -> None:
+    """Run the EEG pipeline end-to-end: raw FIF/EDF -> processed feature Parquet.
+
+    Reads `input_path` via MNE, applies bandpass + ICA + epoching + feature
+    extraction, then writes a model-ready Parquet at `output_path` (preserves
+    float64 dtype; satisfies AGENTS.md §6).
+
+    Args:
+        input_path: Path to the raw recording (.fif or .edf).
+        output_path: Where to write the processed feature Parquet file.
+            Parent directory is created if missing.
+        epoch_duration_s: Length of each fixed-duration epoch (seconds).
+        eog_ch_name: Name of the EOG channel for ICA-based artifact rejection.
+            None disables ICA.
+        n_components: Cap on ICA components.
+        random_state: Seed for ICA's solver. Required for §4 Determinism.
+
+    Raises:
+        FileNotFoundError: if `input_path` does not exist.
+        IsADirectoryError: if `output_path` resolves to an existing directory.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Raw EEG file not found: {input_path}")
+
+    logger.info("Reading raw EEG from %s", input_path)
+    if input_path.suffix.lower() == ".edf":
+        raw = mne.io.read_raw_edf(input_path, preload=True, verbose="ERROR")
+    else:
+        raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
+    logger.info(
+        "Loaded %d channels, sfreq=%.1f Hz, n_times=%d",
+        len(raw.ch_names), raw.info["sfreq"], raw.n_times,
+    )
+
+    features = extract_features_from_recording(
+        raw,
+        epoch_duration_s=epoch_duration_s,
+        eog_ch_name=eog_ch_name,
+        n_components=n_components,
+        random_state=random_state,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.is_dir():
+        raise IsADirectoryError(
+            f"output_path must be a file, got a directory: {output_path}"
+        )
+    # Parquet preserves dtypes (float64 features stay float64) and is
+    # byte-deterministic with single-threaded snappy. AGENTS.md §6.
+    features.to_parquet(
+        output_path, index=False, engine="pyarrow", compression="snappy",
+    )
+    logger.info(
+        "Wrote processed features to %s (rows=%d, cols=%d)",
+        output_path, len(features), features.shape[1],
+    )
+
+
+if __name__ == "__main__":
+    # Day-2 CLI entrypoint — runs with default paths against `data/raw/eeg.fif`.
+    # Argument parsing (argparse / click) will land in a later task.
+    #   python -m src.pipelines.eeg_pipeline
+    run_pipeline()

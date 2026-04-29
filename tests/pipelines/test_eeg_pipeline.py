@@ -1,6 +1,7 @@
 """Unit + integration tests for the EEG pipeline."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import mne
@@ -14,6 +15,7 @@ from src.pipelines.eeg_pipeline import (
     extract_features_from_recording,
     is_valid_epoch,
     remove_artifacts_with_ica,
+    run_pipeline,
 )
 
 
@@ -339,5 +341,89 @@ class TestExtractFeaturesFromRecording:
         with pytest.raises(ValueError, match="must be >= 1"):
             extract_features_from_recording(
                 raw, epoch_duration_s=1e-6, eog_ch_name="EOG061",
+                n_components=4, random_state=97,
+            )
+
+
+class TestRunPipeline:
+    def test_end_to_end_writes_processed_parquet(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "rec.fif"
+        output_path = proc_dir / "eeg_features.parquet"
+        shutil.copy(FIXTURE, input_path)
+
+        run_pipeline(
+            input_path=input_path, output_path=output_path,
+            epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+
+        assert output_path.exists()
+        df = pd.read_parquet(output_path)
+        assert len(df) == 5
+        assert all(c.startswith("feat_") for c in df.columns)
+
+    def test_run_pipeline_preserves_float64_dtype(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "rec.fif"
+        output_path = proc_dir / "eeg_features.parquet"
+        shutil.copy(FIXTURE, input_path)
+
+        run_pipeline(
+            input_path=input_path, output_path=output_path,
+            epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        df = pd.read_parquet(output_path)
+        for col in df.columns:
+            assert df[col].dtype == np.float64, f"{col} widened to {df[col].dtype}"
+
+    def test_run_pipeline_is_idempotent(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "rec.fif"
+        output_path = proc_dir / "eeg_features.parquet"
+        shutil.copy(FIXTURE, input_path)
+
+        run_pipeline(
+            input_path=input_path, output_path=output_path,
+            epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        first = output_path.read_bytes()
+        run_pipeline(
+            input_path=input_path, output_path=output_path,
+            epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        second = output_path.read_bytes()
+        assert first == second, "EEG pipeline output must be byte-deterministic"
+
+    def test_run_pipeline_raises_when_input_missing(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            run_pipeline(
+                input_path=tmp_path / "nope.fif",
+                output_path=tmp_path / "out.parquet",
+            )
+
+    def test_run_pipeline_rejects_directory_as_output(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        raw_dir.mkdir(parents=True)
+        input_path = raw_dir / "rec.fif"
+        shutil.copy(FIXTURE, input_path)
+        bad_output = tmp_path / "out_dir"
+        bad_output.mkdir()
+        with pytest.raises(IsADirectoryError, match="must be a file"):
+            run_pipeline(
+                input_path=input_path, output_path=bad_output,
+                epoch_duration_s=2.0, eog_ch_name="EOG061",
                 n_components=4, random_state=97,
             )
