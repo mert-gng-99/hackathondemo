@@ -9,6 +9,7 @@ import pytest
 
 from src.pipelines.bbb_pipeline import (
     compute_morgan_fingerprint,
+    extract_features_from_dataframe,
     is_valid_smiles,
 )
 
@@ -56,3 +57,39 @@ class TestComputeMorganFingerprint:
     def test_invalid_smiles_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="invalid SMILES"):
             compute_morgan_fingerprint("not_a_smiles", n_bits=2048, radius=2)
+
+
+class TestExtractFeaturesFromDataFrame:
+    def test_filters_invalid_smiles(self) -> None:
+        raw = pd.read_csv(FIXTURE)
+        # Sanity: fixture contains 6 rows total, 2 are invalid by construction.
+        assert len(raw) == 6
+
+        features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
+
+        # Only the 4 chemically valid rows should remain.
+        assert len(features) == 4
+
+    def test_preserves_label_column(self) -> None:
+        raw = pd.read_csv(FIXTURE)
+        features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
+        assert "p_np" in features.columns
+
+    def test_expands_fingerprint_into_named_columns(self) -> None:
+        raw = pd.read_csv(FIXTURE)
+        features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
+        fp_cols = [c for c in features.columns if c.startswith("fp_")]
+        assert len(fp_cols) == 128
+        # All FP columns must be 0/1 integers.
+        assert features[fp_cols].isin([0, 1]).all().all()
+
+    def test_drops_smiles_string_after_expansion(self) -> None:
+        """Once expanded to bits, the original SMILES string adds no signal."""
+        raw = pd.read_csv(FIXTURE)
+        features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
+        assert "smiles" not in features.columns
+
+    def test_resets_index(self) -> None:
+        raw = pd.read_csv(FIXTURE)
+        features = extract_features_from_dataframe(raw, smiles_col="smiles", n_bits=128, radius=2)
+        assert list(features.index) == list(range(len(features)))

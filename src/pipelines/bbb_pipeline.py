@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pandas as pd
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import ConvertToNumpyArray
@@ -78,3 +79,68 @@ def compute_morgan_fingerprint(
     arr = np.zeros((n_bits,), dtype=np.uint8)
     ConvertToNumpyArray(bit_vect, arr)
     return arr
+
+
+def extract_features_from_dataframe(
+    df: pd.DataFrame,
+    smiles_col: str = "smiles",
+    n_bits: int = 2048,
+    radius: int = 2,
+) -> pd.DataFrame:
+    """Convert a DataFrame of (SMILES + metadata) into model-ready features.
+
+    Steps:
+      1. Validate every SMILES with `is_valid_smiles`. Invalid rows are
+         logged at WARNING with their original index and dropped.
+      2. Compute the Morgan fingerprint for each remaining SMILES.
+      3. Expand the bit vector into `n_bits` integer columns named
+         `fp_0 ... fp_{n_bits - 1}` and concatenate with the surviving
+         non-SMILES metadata.
+
+    Args:
+        df: Raw DataFrame; must contain `smiles_col`.
+        smiles_col: Name of the SMILES column (default `"smiles"`).
+        n_bits: Fingerprint length.
+        radius: Morgan radius.
+
+    Returns:
+        A new DataFrame with the SMILES column dropped and `n_bits` new
+        `fp_*` columns appended. Index is reset to 0..N-1.
+
+    Raises:
+        KeyError: if `smiles_col` is missing from `df`.
+    """
+    if smiles_col not in df.columns:
+        raise KeyError(f"DataFrame is missing required column {smiles_col!r}")
+
+    n_total = len(df)
+    valid_mask = df[smiles_col].apply(is_valid_smiles)
+    n_invalid = int((~valid_mask).sum())
+
+    if n_invalid:
+        invalid_indices = df.index[~valid_mask].tolist()
+        logger.warning(
+            "Dropping %d/%d rows with invalid SMILES (indices=%s)",
+            n_invalid, n_total, invalid_indices,
+        )
+
+    valid_df = df.loc[valid_mask].reset_index(drop=True)
+
+    fingerprints = np.stack(
+        [
+            compute_morgan_fingerprint(s, n_bits=n_bits, radius=radius)
+            for s in valid_df[smiles_col].tolist()
+        ],
+        axis=0,
+    )
+    fp_columns = [f"fp_{i}" for i in range(n_bits)]
+    fp_df = pd.DataFrame(fingerprints, columns=fp_columns, dtype=np.uint8)
+
+    metadata = valid_df.drop(columns=[smiles_col]).reset_index(drop=True)
+    out = pd.concat([metadata, fp_df], axis=1)
+
+    logger.info(
+        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
+        n_total, len(out), n_invalid, 100.0 * n_invalid / max(n_total, 1),
+    )
+    return out
