@@ -1,0 +1,7 @@
+num,name,p_np,smiles
+1,Propanol,1,CCCO
+2,Benzene,1,c1ccccc1
+3,Aspirin,1,CC(=O)OC1=CC=CC=C1C(=O)O
+4,InvalidMol,0,this_is_not_a_smiles
+5,Caffeine,1,CN1C=NC2=C1C(=O)N(C(=O)N2C)C
+6,EmptyMol,0,
