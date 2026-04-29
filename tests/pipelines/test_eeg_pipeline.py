@@ -229,6 +229,12 @@ class TestComputeFeaturesFromEpoch:
         derived_names = tuple(name for name, _ in _STATS_FUNCS)
         assert derived_names == STATS
 
+    def test_constant_channel_yields_finite_features(self) -> None:
+        """A flat-line channel must not produce NaN features (skew/kurtosis are undefined for zero-variance)."""
+        epoch = np.zeros((4, 512), dtype=np.float64)
+        out = compute_features_from_epoch(epoch, sfreq=256.0)
+        assert np.all(np.isfinite(out))
+
 
 class TestExtractFeaturesFromRecording:
     def _load(self) -> mne.io.BaseRaw:
@@ -284,27 +290,54 @@ class TestExtractFeaturesFromRecording:
         assert np.isfinite(df[feat_cols].to_numpy()).all()
 
     def test_drops_invalid_epochs_with_warning(self) -> None:
-        """A NaN in the recording: at least one epoch dropped, no NaN survives.
+        """A NaN in the recording: at least one epoch dropped, no NaN survives, WARNING is logged.
 
         The bandpass filter is a long FIR convolution, so a single NaN sample
         spreads across many samples. The principled behavior is therefore:
         (a) drop every contaminated epoch, not just the source epoch, and
         (b) guarantee no NaN in the output. The exact drop count depends on
         the filter's FIR length, so we assert range + cleanliness instead of
-        an exact number.
+        an exact number. The WARNING line is part of the AGENTS.md §4
+        traceability contract and must always fire when drops happen.
         """
+        import io
+        import logging
+
+        from src.core.logger import get_logger
+        from src.pipelines import eeg_pipeline as mod
+
         raw = self._load()
-        # Inject a NaN into the last 2-second window.
         data = raw.get_data().copy()
         data[0, -10] = np.nan
         bad_raw = mne.io.RawArray(data, raw.info, verbose="ERROR")
-        df = extract_features_from_recording(
-            bad_raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
-            n_components=4, random_state=97,
-        )
+
+        logger = get_logger(mod.__name__, level=logging.INFO)
+        handler = logger.handlers[0]
+        buf = io.StringIO()
+        original_stream = handler.stream
+        handler.stream = buf
+        try:
+            df = extract_features_from_recording(
+                bad_raw, epoch_duration_s=2.0, eog_ch_name="EOG061",
+                n_components=4, random_state=97,
+            )
+        finally:
+            handler.stream = original_stream
+
         # At least one epoch dropped (vs the clean 5-row baseline).
         assert len(df) < 5
         # No NaN/inf must survive into the feature table.
         feat_cols = [c for c in df.columns if c.startswith("feat_")]
         assert df[feat_cols].notna().all().all()
         assert np.isfinite(df[feat_cols].to_numpy()).all()
+        # AGENTS.md §4: the WARNING line was actually emitted.
+        log_output = buf.getvalue()
+        assert "Dropping" in log_output and "epochs with invalid samples" in log_output
+
+    def test_raises_when_epoch_duration_too_small(self) -> None:
+        raw = self._load()
+        with pytest.raises(ValueError, match="must be >= 1"):
+            extract_features_from_recording(
+                raw, epoch_duration_s=1e-6, eog_ch_name="EOG061",
+                n_components=4, random_state=97,
+            )

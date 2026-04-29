@@ -253,6 +253,11 @@ def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
       - ``kurtosis`` uses ``scipy.stats.kurtosis(fisher=True, bias=True)`` —
         Fisher's *excess* kurtosis (Gaussian → 0, not 3). Add 3 if Pearson
         kurtosis is required downstream.
+      - For constant-valued channels (zero variance), ``skew`` and
+        ``kurtosis`` are mathematically undefined and scipy returns NaN.
+        We post-process the feature vector with ``np.nan_to_num`` to map
+        any NaN/inf to 0.0, preserving the "no NaN survives" Parquet
+        contract from AGENTS.md §6.
 
     Precondition: `epoch` must be finite (no NaN/inf). Filter via
     `is_valid_epoch` before calling — feature values are NaN-propagating.
@@ -274,7 +279,11 @@ def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
             feats.append(_band_power(freqs, psd, lo, hi))
         for _name, fn in _STATS_FUNCS:
             feats.append(fn(x))
-    return np.asarray(feats, dtype=np.float64)
+    arr = np.asarray(feats, dtype=np.float64)
+    # Constant-valued / zero-variance channels (e.g., disconnected electrodes)
+    # make scipy.stats.skew / kurtosis return NaN. Map those to 0.0 so the
+    # downstream Parquet contract ("no NaN in feature table") holds.
+    return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _build_feature_columns(eeg_ch_names: list[str]) -> list[str]:
@@ -315,6 +324,11 @@ def extract_features_from_recording(
     Returns:
         A `pd.DataFrame` with one row per valid epoch and ``n_eeg_channels *
         (len(EEG_BANDS) + len(STATS))`` ``feat_*`` columns.
+
+    Raises:
+        ValueError: if `epoch_duration_s * sfreq` rounds to less than 1 sample.
+            (Other ValueError sources can propagate from `bandpass_filter`
+            and `remove_artifacts_with_ica`; see their respective docstrings.)
     """
     filtered = bandpass_filter(raw, l_freq=1.0, h_freq=40.0)
     cleaned = remove_artifacts_with_ica(
@@ -326,10 +340,15 @@ def extract_features_from_recording(
 
     sfreq = float(cleaned.info["sfreq"])
     n_samples_per_epoch = int(round(epoch_duration_s * sfreq))
+    if n_samples_per_epoch < 1:
+        raise ValueError(
+            f"epoch_duration_s={epoch_duration_s!r} at sfreq={sfreq} Hz produces "
+            f"{n_samples_per_epoch} samples per epoch (must be >= 1)"
+        )
     eeg_picks = mne.pick_types(cleaned.info, eeg=True, meg=False, eog=False)
     eeg_names = [cleaned.ch_names[i] for i in eeg_picks]
     data = cleaned.get_data(picks=eeg_picks)  # shape (n_eeg, n_times)
-    n_eeg, n_times = data.shape
+    _, n_times = data.shape
     n_total_epochs = n_times // n_samples_per_epoch
 
     feature_cols = _build_feature_columns(eeg_names)
