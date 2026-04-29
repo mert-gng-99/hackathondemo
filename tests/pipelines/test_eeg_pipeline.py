@@ -427,3 +427,26 @@ class TestRunPipeline:
                 epoch_duration_s=2.0, eog_ch_name="EOG061",
                 n_components=4, random_state=97,
             )
+
+
+import mlflow
+from src.pipelines import eeg_pipeline as _eeg_for_mlflow_test
+
+
+class TestEEGPipelineMLflow:
+    def test_run_pipeline_creates_mlflow_run(self, tmp_path):
+        from pathlib import Path
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "eeg_sample.fif"
+        out = tmp_path / "out.parquet"
+        _eeg_for_mlflow_test.run_pipeline(
+            input_path=fixture, output_path=out,
+            epoch_duration_s=2.0, eog_ch_name="EOG061",
+            n_components=4, random_state=97,
+        )
+        runs = mlflow.search_runs(
+            experiment_names=["eeg_pipeline"],
+            order_by=["start_time DESC"],
+        )
+        assert len(runs) >= 1
+        assert "metrics.rows_out" in runs.columns
+        assert runs.iloc[0]["metrics.rows_out"] > 0

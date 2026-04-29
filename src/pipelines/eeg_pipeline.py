@@ -12,6 +12,7 @@ a logged WARNING), determinism (seeded ICA + sklearn RNG), traceability
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -25,6 +26,7 @@ from scipy import stats as scipy_stats
 from src.core.determinism import pin_threads
 from src.core.logger import get_logger
 from src.core.storage import write_parquet
+from src.core.tracking import track_pipeline_run
 
 logger = get_logger(__name__)
 
@@ -439,6 +441,7 @@ def run_pipeline(
     if not input_path.exists():
         raise FileNotFoundError(f"Raw EEG file not found: {input_path}")
 
+    started = time.perf_counter()
     logger.info("Reading raw EEG from %s", input_path)
     # Format dispatch: .edf via read_raw_edf, anything else (FIF, gzipped FIF)
     # via read_raw_fif. .bdf / .set / .vhdr support can be added here.
@@ -466,6 +469,26 @@ def run_pipeline(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],
     )
+
+    duration_sec = time.perf_counter() - started
+
+    with track_pipeline_run(
+        experiment_name="eeg_pipeline",
+        params={
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "epoch_duration_s": epoch_duration_s,
+            "eog_ch_name": str(eog_ch_name) if eog_ch_name is not None else "None",
+            "n_components": n_components,
+            "random_state": random_state,
+        },
+        metrics={
+            "rows_out": float(len(features)),
+            "duration_sec": duration_sec,
+        },
+        artifact_path=output_path,
+    ):
+        pass
 
 
 if __name__ == "__main__":
