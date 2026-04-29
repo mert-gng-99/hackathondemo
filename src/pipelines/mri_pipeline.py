@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import os
 
+import nibabel as nib
 import numpy as np
 import pyarrow as pa
+from scipy import ndimage as scipy_ndimage
 
 from src.core.logger import get_logger
 
@@ -48,3 +50,32 @@ def is_valid_volume(volume: np.ndarray | None) -> bool:
     if not np.all(np.isfinite(volume)):
         return False
     return True
+
+
+def mask_brain(
+    volume: np.ndarray,
+    intensity_threshold: float | None = None,
+) -> np.ndarray:
+    """Build a brain mask from a 3-D MRI volume.
+
+    Two-step pipeline:
+      1. Intensity threshold: keep voxels above `intensity_threshold`. When
+         `None`, use the volume's mean as a robust auto-threshold (works on
+         the synthetic fixture where brain ≫ background; for real data the
+         caller should pass an Otsu or BET-derived threshold explicitly).
+      2. Morphological opening (`scipy.ndimage.binary_opening`) to remove
+         isolated noise voxels and disconnected fragments.
+
+    Args:
+        volume: 3-D numeric `np.ndarray` (must satisfy `is_valid_volume`).
+        intensity_threshold: Voxel-intensity floor. `None` → use `volume.mean()`.
+
+    Returns:
+        A boolean `np.ndarray` of the same shape as `volume`. True = brain.
+    """
+    if intensity_threshold is None:
+        intensity_threshold = float(volume.mean())
+
+    raw = volume > intensity_threshold
+    cleaned = scipy_ndimage.binary_opening(raw, iterations=1)
+    return cleaned.astype(bool)
