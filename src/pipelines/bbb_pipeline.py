@@ -36,7 +36,7 @@ RDLogger.DisableLog("rdApp.*")
 
 # Default I/O paths for the BBB pipeline. Override via run_pipeline() args.
 DEFAULT_INPUT = Path("data/raw/bbbp.csv")
-DEFAULT_OUTPUT = Path("data/processed/bbbp_features.csv")
+DEFAULT_OUTPUT = Path("data/processed/bbbp_features.parquet")
 
 
 def is_valid_smiles(smiles: str | float | None) -> bool:
@@ -196,12 +196,13 @@ def run_pipeline(
 
     Reads the Kaggle BBBP CSV at `input_path`, validates and converts
     SMILES into Morgan fingerprints, and writes the model-ready table
-    to `output_path`. Output is overwritten on every run (idempotent).
+    as a Parquet file at `output_path`. Output is overwritten on every
+    run (idempotent) and preserves the uint8 dtype of fingerprint columns.
 
     Args:
         input_path: Path to the raw BBBP CSV (must include `smiles_col`).
-        output_path: Where to write the processed feature CSV. Parent
-            directory is created if missing.
+        output_path: Where to write the processed feature Parquet file.
+            Parent directory is created if missing.
         smiles_col: SMILES column name in the raw CSV.
         n_bits: Morgan fingerprint length.
         radius: Morgan radius.
@@ -230,7 +231,9 @@ def run_pipeline(
         raise IsADirectoryError(
             f"output_path must be a file, got a directory: {output_path}"
         )
-    features.to_csv(output_path, index=False, lineterminator="\n")
+    # Parquet preserves dtypes (uint8 stays uint8) and is byte-deterministic
+    # when compression is fixed. Used across BBB / EEG / MRI pipelines.
+    features.to_parquet(output_path, index=False, engine="pyarrow", compression="snappy")
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],

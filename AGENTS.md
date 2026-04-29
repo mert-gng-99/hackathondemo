@@ -31,7 +31,7 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 ├── pytest.ini
 ├── data/
 │   ├── raw/                  # Untouched source data. NEVER train on this directly.
-│   └── processed/            # Pipeline output. Model-ready outputs (overwritten on each run; see §4).
+│   └── processed/            # Pipeline output as Parquet (preserves dtypes; overwritten each run; see §4).
 ├── src/
 │   ├── api/                  # FastAPI routers, request/response schemas
 │   ├── pipelines/            # One file per modality. Pure functions + a `run_pipeline()` entry.
@@ -85,3 +85,12 @@ refactored into a pipeline.
 5. Write deterministic output to `output_path`.
 6. Document any new dependency in `requirements.txt` (pinned).
 7. Add a one-line entry to this file's pipeline table.
+
+## 6. Storage Format Convention
+
+All `data/processed/` outputs MUST be **Parquet** (`pyarrow` engine, `compression="snappy"`):
+- Preserves dtypes (uint8 fingerprints stay uint8; float32 EEG features stay float32) — CSV silently widens numeric columns and is unsuitable for the high-dimensional float arrays produced by the EEG and MRI pipelines.
+- Byte-deterministic with fixed compression and single-threaded writes (satisfies §4 Determinism).
+- Read with `pd.read_parquet(path)`; no dtype hints required.
+
+The raw `data/raw/` inputs may be in any vendor-supplied format (CSV for BBBP, EDF/FIF for EEG, NIfTI for MRI).

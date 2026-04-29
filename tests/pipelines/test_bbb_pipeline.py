@@ -141,28 +141,44 @@ class TestExtractFeaturesFromDataFrame:
 
 
 class TestRunPipeline:
-    def test_end_to_end_writes_processed_csv(self, tmp_path: Path) -> None:
+    def test_end_to_end_writes_processed_parquet(self, tmp_path: Path) -> None:
         # Arrange: copy fixture into a synthetic raw layout.
         raw_dir = tmp_path / "data" / "raw"
         proc_dir = tmp_path / "data" / "processed"
         raw_dir.mkdir(parents=True)
         proc_dir.mkdir(parents=True)
         input_path = raw_dir / "bbbp.csv"
-        output_path = proc_dir / "bbbp_features.csv"
+        output_path = proc_dir / "bbbp_features.parquet"
         shutil.copy(FIXTURE, input_path)
 
         # Act
         run_pipeline(input_path=input_path, output_path=output_path, n_bits=128, radius=2)
 
         # Assert: file exists
-        assert output_path.exists(), "pipeline must write processed CSV"
+        assert output_path.exists(), "pipeline must write processed Parquet"
 
         # Assert: content is correct
-        out = pd.read_csv(output_path)
+        out = pd.read_parquet(output_path)
         assert len(out) == 4  # 6 raw - 2 invalid
         assert "p_np" in out.columns
         assert sum(c.startswith("fp_") for c in out.columns) == 128
         assert "smiles" not in out.columns
+
+    def test_run_pipeline_preserves_uint8_dtype(self, tmp_path: Path) -> None:
+        """The Parquet round-trip must keep fp_* columns as uint8 (not widen to int64)."""
+        raw_dir = tmp_path / "data" / "raw"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        input_path = raw_dir / "bbbp.csv"
+        output_path = proc_dir / "bbbp_features.parquet"
+        shutil.copy(FIXTURE, input_path)
+
+        run_pipeline(input_path=input_path, output_path=output_path, n_bits=64, radius=2)
+        out = pd.read_parquet(output_path)
+        fp_cols = [c for c in out.columns if c.startswith("fp_")]
+        for col in fp_cols:
+            assert out[col].dtype == np.uint8, f"{col} widened to {out[col].dtype}"
 
     def test_run_pipeline_is_idempotent(self, tmp_path: Path) -> None:
         raw_dir = tmp_path / "data" / "raw"
@@ -170,7 +186,7 @@ class TestRunPipeline:
         raw_dir.mkdir(parents=True)
         proc_dir.mkdir(parents=True)
         input_path = raw_dir / "bbbp.csv"
-        output_path = proc_dir / "bbbp_features.csv"
+        output_path = proc_dir / "bbbp_features.parquet"
         shutil.copy(FIXTURE, input_path)
 
         run_pipeline(input_path=input_path, output_path=output_path, n_bits=64, radius=2)
@@ -184,7 +200,7 @@ class TestRunPipeline:
         with pytest.raises(FileNotFoundError):
             run_pipeline(
                 input_path=tmp_path / "nope.csv",
-                output_path=tmp_path / "out.csv",
+                output_path=tmp_path / "out.parquet",
             )
 
     def test_run_pipeline_rejects_directory_as_output(self, tmp_path: Path) -> None:

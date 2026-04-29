@@ -1,4 +1,4 @@
-# Requires Python 3.10–3.12 (rdkit / numpy / pandas / scipy / scikit-learn pins ship cp310–cp312 wheels only).
+# Requires Python 3.10–3.12 (rdkit / numpy / pandas / pyarrow / scipy / scikit-learn pins ship cp310–cp312 wheels only).
 # See AGENTS.md §3 for the full coding-standards contract.
 
 # --- Web / API layer ---
@@ -9,6 +9,7 @@ pydantic==2.9.2
 # --- Core data stack ---
 numpy==1.26.4
 pandas==2.2.2
+pyarrow==17.0.0
 scipy==1.13.1
 scikit-learn==1.5.1
 
