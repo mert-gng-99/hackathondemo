@@ -11,27 +11,22 @@ traceability (in/out/dropped counts at INFO), and idempotent overwrite.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 from scipy import ndimage as scipy_ndimage
 
+from src.core.determinism import pin_threads
 from src.core.logger import get_logger
+from src.core.storage import write_parquet
 
 logger = get_logger(__name__)
 
 # Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
-# (AGENTS.md §4 rule 3) holds across hardware. Without this, multi-threaded
-# floating-point reductions can reorder and produce non-bit-identical output.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-pa.set_cpu_count(1)
-pa.set_io_thread_count(1)
+# (AGENTS.md §4 rule 3) holds across hardware. See src.core.determinism.
+pin_threads()
 
 
 def is_valid_volume(volume: np.ndarray | None) -> bool:
@@ -362,14 +357,7 @@ def run_pipeline(
         empty = pd.DataFrame(
             columns=["subject_id", "site", *feature_cols]
         ).astype({c: np.float64 for c in feature_cols})
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if output_path.is_dir():
-            raise IsADirectoryError(
-                f"output_path must be a file, got a directory: {output_path}"
-            )
-        empty.to_parquet(
-            output_path, index=False, engine="pyarrow", compression="snappy",
-        )
+        write_parquet(empty, output_path)
         return
 
     raw_features = pd.DataFrame(rows)
@@ -417,16 +405,9 @@ def run_pipeline(
         n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
     )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.is_dir():
-        raise IsADirectoryError(
-            f"output_path must be a file, got a directory: {output_path}"
-        )
     # Parquet preserves dtypes (float64 features stay float64) and is
     # byte-deterministic with single-threaded snappy. AGENTS.md §6.
-    final.to_parquet(
-        output_path, index=False, engine="pyarrow", compression="snappy",
-    )
+    write_parquet(final, output_path)
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(final), final.shape[1],
