@@ -16,7 +16,7 @@ The platform exposes three production pipelines behind a single FastAPI surface:
 
 | Modality | Pipeline | Core Technique |
 |---|---|---|
-| Image (MRI / fMRI) | `src/pipelines/mri_pipeline.py` *(planned, Day 3)* | ComBat Harmonization for site-level domain shift |
+| Image (MRI / fMRI) | `src/pipelines/mri_pipeline.py` | ComBat Harmonization for site-level domain shift |
 | Signal (EEG) | `src/pipelines/eeg_pipeline.py` | MNE-Python + ICA for artifact removal |
 | Tabular (BBB / molecules) | `src/pipelines/bbb_pipeline.py` | RDKit Morgan fingerprints from SMILES |
 
@@ -78,6 +78,14 @@ floating-point reductions. Each pipeline module sets `OMP_NUM_THREADS=1`,
 single-threaded mode at import time. CI runners and developer machines do
 not need to set these manually — the pipeline modules handle it — but
 overriding them in the environment will break Determinism rule 3.
+
+**ComBat determinism boundary**: the MRI pipeline's `harmonize_combat` wraps
+`neuroHarmonize.harmonizationLearn` and applies `np.round(14)` to its output.
+This is a defensive measure: with the thread-pinning above, harmonization is
+already bit-identical, but the rounding guarantees byte-identity even when
+the env-pin discipline is bypassed (e.g. a sub-process that re-exports a
+thread count). It discards ~5 trailing-mantissa bits of float64 — well below
+ComBat's biological effect-size precision floor.
 
 A model training script is allowed to import from `data/processed/` only. If a
 training script references `data/raw/` directly, that is a bug and must be

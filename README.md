@@ -12,7 +12,7 @@ and Docker shipping.
 |-----|----------|----------|--------|
 | 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped — 30 tests green |
 | 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped — 67 tests green |
-| 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Planned (ComBat harmonization) |
+| 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped — 106 tests green |
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ and Docker shipping.
 # 1. Create venv and install
 python3.12 -m venv .venv312 && source .venv312/bin/activate && pip install -r requirements.txt
 
-# 2. Verify — expect 67 passed
+# 2. Verify — expect 106 passed
 pytest -v
 
 # 3. Smoke run with the bundled 6-row fixture
@@ -44,6 +44,15 @@ python -m src.pipelines.eeg_pipeline
 ```
 
 Result lives at `data/processed/eeg_features.parquet`.
+
+```bash
+# Smoke-test the MRI pipeline with the bundled fixture (6 subjects × 2 sites)
+mkdir -p data/raw/mri
+cp tests/fixtures/mri_sample/* data/raw/mri/
+python -m src.pipelines.mri_pipeline
+```
+
+Result lives at `data/processed/mri_features.parquet` (48 ROI features per subject, ComBat-harmonized across sites).
 
 > **Real BBBP data:** not bundled (gitignored). Download from
 > [Kaggle](https://www.kaggle.com/datasets/priyanagda/bbbp) or
@@ -99,6 +108,18 @@ determinism, traceability, idempotence).
 
 The pipeline is seeded (`random_state=97`) and produces byte-identical Parquet output for the same input — satisfying the §4 Determinism contract. Output is float64, preserved through the Parquet round-trip.
 
+## MRI Pipeline (Day 3)
+
+| Function | Purpose |
+|---|---|
+| `is_valid_volume(volume)` | Returns True iff input is a finite, numeric, non-empty 3-D ndarray. Rejects NaN/inf, non-numeric dtypes, lists/scalars. |
+| `mask_brain(volume, intensity_threshold)` | Two-step brain mask: intensity threshold (default = volume mean) + 6-connectivity morphological opening to drop isolated noise voxels. WARNs if mask is empty. |
+| `extract_features_from_volume(volume, mask, n_roi_axes)` | Partitions the masked volume into `prod(n_roi_axes)` axis-aligned octants (default 2×2×2 = 8) and emits 6 stats per ROI: mean / std / p10 / p50 / p90 / voxel_count. Empty ROIs → 0.0 (no NaN). Single source of truth via `_ROI_STATS_FUNCS`. |
+| `harmonize_combat(features, sites, feature_cols)` | Wraps `neuroHarmonize.harmonizationLearn` with `np.round(14)` defensive determinism boundary. Removes site-level domain shift on the named columns. Raises if <2 sites or empty `feature_cols` or row/site length mismatch. |
+| `run_pipeline(input_dir, sites_csv, output_path, ...)` | End-to-end NIfTI directory → ComBat-harmonized Parquet orchestrator. Drops invalid volumes with logged WARNING. Splits feature columns on a `_MIN_VAR_THRESHOLD = 1e-8` variance floor (constant columns bypass ComBat to avoid NaN). Idempotent; raises on missing input or directory output. |
+
+Output schema: one row per surviving subject with columns `subject_id, site, feat_roi{i}_<stat>` (8 ROIs × 6 stats = 48 features). All `feat_*` are float64 (preserved through the Parquet round-trip).
+
 ## Storage Format
 
 Pipeline outputs are written as Parquet files using the `pyarrow` engine with snappy
@@ -116,8 +137,7 @@ finishes in under 2 seconds on a 2024 laptop.
 ## Roadmap
 
 - **Day 2 (shipped):** `eeg_pipeline.py` — bandpass + MNE ICA artifact removal + PSD + statistical features → Parquet.
-- **Day 3:** `mri_pipeline.py` — load NIfTI volumes, ComBat harmonization
-  (`neuroharmonize`) for site-level domain shift, write features to Parquet.
+- **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet (48 features, 106 tests green).
 - **Day 4+:** FastAPI surface in `src/api/`, MLflow experiment tracking, Docker images,
   CI.
 
