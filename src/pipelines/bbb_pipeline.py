@@ -11,28 +11,23 @@ traceability (row count in / out / dropped), and idempotent output.
 from __future__ import annotations
 
 import math
-import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import ConvertToNumpyArray
 
+from src.core.determinism import pin_threads
 from src.core.logger import get_logger
+from src.core.storage import write_parquet
 
 logger = get_logger(__name__)
 
 # Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
-# (AGENTS.md §4 rule 3) holds across hardware. Without this, multi-threaded
-# floating-point reductions can reorder and produce non-bit-identical output.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-pa.set_cpu_count(1)
-pa.set_io_thread_count(1)
+# (AGENTS.md §4 rule 3) holds across hardware.
+pin_threads()
 
 # Suppress RDKit's noisy C++-level warning stream; we surface our own
 # structured warnings via the project logger when a SMILES fails to parse.
@@ -237,14 +232,9 @@ def run_pipeline(
         df, smiles_col=smiles_col, n_bits=n_bits, radius=radius,
     )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.is_dir():
-        raise IsADirectoryError(
-            f"output_path must be a file, got a directory: {output_path}"
-        )
     # Parquet preserves dtypes (uint8 stays uint8) and is byte-deterministic
     # when compression is fixed. Used across BBB / EEG / MRI pipelines.
-    features.to_parquet(output_path, index=False, engine="pyarrow", compression="snappy")
+    write_parquet(features, output_path)
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],
