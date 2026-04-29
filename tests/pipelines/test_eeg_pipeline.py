@@ -219,3 +219,10 @@ class TestComputeFeaturesFromEpoch:
         a = compute_features_from_epoch(epoch, sfreq=256.0)
         b = compute_features_from_epoch(epoch, sfreq=256.0)
         np.testing.assert_array_equal(a, b)
+
+    def test_stats_labels_and_funcs_stay_in_sync(self) -> None:
+        """STATS labels must equal the names in _STATS_FUNCS — single source of truth."""
+        from src.pipelines.eeg_pipeline import _STATS_FUNCS
+
+        derived_names = tuple(name for name, _ in _STATS_FUNCS)
+        assert derived_names == STATS

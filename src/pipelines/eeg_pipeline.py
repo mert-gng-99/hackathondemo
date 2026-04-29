@@ -170,7 +170,6 @@ EEG_BANDS: dict[str, tuple[float, float]] = {
     "beta":  (13.0, 30.0),
     "gamma": (30.0, 40.0),
 }
-STATS: tuple[str, ...] = ("mean", "std", "var", "skew", "kurtosis")
 
 
 def _band_power(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> float:
@@ -179,6 +178,44 @@ def _band_power(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> flo
     if not mask.any():
         return 0.0
     return float(psd[mask].mean())
+
+
+# Statistical-moment functions, bound to their column-label names. The
+# `STATS` tuple below is derived from this list so labels and computations
+# can never drift out of sync (a class of bug the original parallel-list
+# design was vulnerable to).
+_STATS_FUNCS: tuple[tuple[str, "_StatFn"], ...]  # populated below
+_StatFn = "callable that maps a 1-D channel array to a single float"
+
+
+def _stat_mean(x: np.ndarray) -> float:
+    return float(np.mean(x))
+
+
+def _stat_std(x: np.ndarray) -> float:
+    return float(np.std(x))
+
+
+def _stat_var(x: np.ndarray) -> float:
+    return float(np.var(x))
+
+
+def _stat_skew(x: np.ndarray) -> float:
+    return float(scipy_stats.skew(x))
+
+
+def _stat_kurtosis(x: np.ndarray) -> float:
+    return float(scipy_stats.kurtosis(x))
+
+
+_STATS_FUNCS = (
+    ("mean", _stat_mean),
+    ("std", _stat_std),
+    ("var", _stat_var),
+    ("skew", _stat_skew),
+    ("kurtosis", _stat_kurtosis),
+)
+STATS: tuple[str, ...] = tuple(name for name, _ in _STATS_FUNCS)
 
 
 def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
@@ -190,12 +227,25 @@ def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
     Channels are stacked in their input order. The resulting 1-D vector has
     length ``n_channels * (len(EEG_BANDS) + len(STATS))``.
 
-    PSD is computed with Welch's method (`scipy.signal.welch`) at the
-    epoch's sample rate. Higher moments use `scipy.stats` with default
-    bias correction.
+    PSD uses Welch's method (`scipy.signal.welch`, `nperseg=min(256, n_samples)`).
+    For meaningful Welch averaging, the epoch should contain at least
+    `2 * nperseg` samples (e.g. ≥2 seconds at 256 Hz); shorter epochs degrade
+    to a single-segment periodogram with high estimation variance.
+
+    Statistical conventions:
+      - ``mean``, ``std``, ``var`` use NumPy with ``ddof=0`` (biased / population
+        estimators). For sample statistics callers must apply ``ddof=1`` adjustment
+        downstream.
+      - ``skew`` uses ``scipy.stats.skew(bias=True)`` (biased estimator).
+      - ``kurtosis`` uses ``scipy.stats.kurtosis(fisher=True, bias=True)`` —
+        Fisher's *excess* kurtosis (Gaussian → 0, not 3). Add 3 if Pearson
+        kurtosis is required downstream.
+
+    Precondition: `epoch` must be finite (no NaN/inf). Filter via
+    `is_valid_epoch` before calling — feature values are NaN-propagating.
 
     Args:
-        epoch: A 2-D array shape (n_channels, n_samples).
+        epoch: A 2-D array shape (n_channels, n_samples), all-finite.
         sfreq: Sampling rate in Hz.
 
     Returns:
@@ -209,9 +259,6 @@ def compute_features_from_epoch(epoch: np.ndarray, sfreq: float) -> np.ndarray:
         freqs, psd = scipy_signal.welch(x, fs=sfreq, nperseg=nperseg)
         for _band, (lo, hi) in EEG_BANDS.items():
             feats.append(_band_power(freqs, psd, lo, hi))
-        feats.append(float(np.mean(x)))
-        feats.append(float(np.std(x)))
-        feats.append(float(np.var(x)))
-        feats.append(float(scipy_stats.skew(x)))
-        feats.append(float(scipy_stats.kurtosis(x)))
+        for _name, fn in _STATS_FUNCS:
+            feats.append(fn(x))
     return np.asarray(feats, dtype=np.float64)
