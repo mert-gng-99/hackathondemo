@@ -7,8 +7,8 @@ __pycache__/
 .ruff_cache/
 
 # Virtual envs
-.venv/
-venv/
+.venv*/
+venv*/
 env/
 
 # Data — only keep folder structure, never raw payloads
