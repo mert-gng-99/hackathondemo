@@ -11,6 +11,7 @@ traceability (row count in / out / dropped), and idempotent output.
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ from rdkit.DataStructs import ConvertToNumpyArray
 from src.core.determinism import pin_threads
 from src.core.logger import get_logger
 from src.core.storage import write_parquet
+from src.core.tracking import track_pipeline_run
 
 logger = get_logger(__name__)
 
@@ -224,6 +226,7 @@ def run_pipeline(
     if not input_path.exists():
         raise FileNotFoundError(f"Raw BBBP file not found: {input_path}")
 
+    started = time.perf_counter()
     logger.info("Reading raw BBBP from %s", input_path)
     df = pd.read_csv(input_path)
     logger.info("Loaded %d rows, %d columns", len(df), len(df.columns))
@@ -239,6 +242,26 @@ def run_pipeline(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],
     )
+
+    duration_sec = time.perf_counter() - started
+
+    with track_pipeline_run(
+        experiment_name="bbb_pipeline",
+        params={
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "n_bits": n_bits,
+            "radius": radius,
+        },
+        metrics={
+            "rows_in": float(len(df)),
+            "rows_out": float(len(features)),
+            "rows_dropped": float(len(df) - len(features)),
+            "duration_sec": duration_sec,
+        },
+        artifact_path=output_path,
+    ):
+        pass
 
 
 if __name__ == "__main__":

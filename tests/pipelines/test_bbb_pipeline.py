@@ -215,3 +215,22 @@ class TestRunPipeline:
 
         with pytest.raises(IsADirectoryError, match="must be a file"):
             run_pipeline(input_path=input_path, output_path=bad_output, n_bits=32)
+
+
+import mlflow
+from src.pipelines import bbb_pipeline as _bbb_for_mlflow_test
+
+
+class TestBBBPipelineMLflow:
+    def test_run_pipeline_creates_mlflow_run(self, tmp_path):
+        from pathlib import Path
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "bbbp_sample.csv"
+        out = tmp_path / "out.parquet"
+        _bbb_for_mlflow_test.run_pipeline(input_path=fixture, output_path=out)
+        runs = mlflow.search_runs(
+            experiment_names=["bbb_pipeline"],
+            order_by=["start_time DESC"],
+        )
+        assert len(runs) >= 1
+        assert "metrics.rows_out" in runs.columns
+        assert runs.iloc[0]["metrics.rows_out"] > 0
