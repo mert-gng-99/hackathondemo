@@ -12,6 +12,7 @@ traceability (in/out/dropped counts at INFO), and idempotent overwrite.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
@@ -258,3 +259,162 @@ def harmonize_combat(
         len(out), len(feature_cols), sites.nunique(),
     )
     return out
+
+
+# Default I/O paths for the MRI pipeline. Override via run_pipeline() args.
+DEFAULT_INPUT = Path("data/raw/mri")
+DEFAULT_OUTPUT = Path("data/processed/mri_features.parquet")
+
+
+def _list_nifti_volumes(input_dir: Path) -> list[Path]:
+    """Return sorted list of .nii / .nii.gz files in `input_dir`."""
+    return sorted(
+        p for p in input_dir.iterdir()
+        if p.suffix == ".nii" or p.name.endswith(".nii.gz")
+    )
+
+
+def run_pipeline(
+    input_dir: Path = DEFAULT_INPUT,
+    sites_csv: Path | None = None,
+    output_path: Path = DEFAULT_OUTPUT,
+    intensity_threshold: float | None = None,
+    n_roi_axes: tuple[int, int, int] = DEFAULT_N_ROI_AXES,
+) -> None:
+    """Run the MRI pipeline end-to-end: NIfTI directory → harmonized Parquet.
+
+    For each `subject_id.nii(.gz)` in `input_dir`, validates the volume,
+    masks the brain, computes per-ROI statistics, then harmonizes across
+    sites (column "site" of `sites_csv`, joined on "subject_id") via ComBat.
+    Output is float64 Parquet at `output_path`.
+
+    Args:
+        input_dir: Directory containing one NIfTI per subject and a
+            `sites.csv` (or `sites_csv` override) with columns
+            `subject_id, site`.
+        sites_csv: Path to the site-covariates CSV. If `None`, defaults to
+            `input_dir / "sites.csv"`.
+        output_path: Where to write the processed feature Parquet file.
+        intensity_threshold: Brain-mask intensity floor. `None` → per-volume
+            mean (see `mask_brain`).
+        n_roi_axes: ROI grid (z, y, x).
+
+    Raises:
+        FileNotFoundError: if `input_dir` does not exist.
+        IsADirectoryError: if `output_path` resolves to an existing directory.
+        KeyError: if `sites_csv` is missing a site for some subject.
+    """
+    input_dir = Path(input_dir)
+    output_path = Path(output_path)
+    if not input_dir.exists():
+        raise FileNotFoundError(f"MRI input directory not found: {input_dir}")
+    sites_csv = Path(sites_csv) if sites_csv is not None else input_dir / "sites.csv"
+    if not sites_csv.exists():
+        raise FileNotFoundError(f"sites_csv not found: {sites_csv}")
+
+    logger.info("Reading MRI volumes from %s", input_dir)
+    nifti_paths = _list_nifti_volumes(input_dir)
+    sites_df = pd.read_csv(sites_csv)
+
+    rows: list[dict[str, float | str]] = []
+    invalid_subject_ids: list[str] = []
+    for path in nifti_paths:
+        subject_id = path.name.removesuffix(".nii.gz").removesuffix(".nii")
+        volume = nib.load(path).get_fdata()
+        if not is_valid_volume(volume):
+            invalid_subject_ids.append(subject_id)
+            continue
+        mask = mask_brain(volume, intensity_threshold=intensity_threshold)
+        feats = extract_features_from_volume(volume, mask, n_roi_axes=n_roi_axes)
+        feats["subject_id"] = subject_id
+        rows.append(feats)
+
+    n_total = len(nifti_paths)
+    n_dropped = len(invalid_subject_ids)
+    if n_dropped:
+        display = invalid_subject_ids[:10]
+        suffix = (
+            f"... (+{n_dropped - 10} more)" if n_dropped > 10 else ""
+        )
+        logger.warning(
+            "Dropping %d/%d volumes with invalid samples (subjects=%s%s)",
+            n_dropped, n_total, display, suffix,
+        )
+
+    feature_cols = [
+        f"feat_roi{i}_{stat}"
+        for i in range(int(np.prod(n_roi_axes)))
+        for stat in ROI_STATS
+    ]
+
+    if not rows:
+        logger.info(
+            "Feature extraction complete: in=%d, out=0, dropped=%d (%.2f%%)",
+            n_total, n_dropped, 100.0 * n_dropped / max(n_total, 1),
+        )
+        empty = pd.DataFrame(
+            columns=["subject_id", "site", *feature_cols]
+        ).astype({c: np.float64 for c in feature_cols})
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.is_dir():
+            raise IsADirectoryError(
+                f"output_path must be a file, got a directory: {output_path}"
+            )
+        empty.to_parquet(
+            output_path, index=False, engine="pyarrow", compression="snappy",
+        )
+        return
+
+    raw_features = pd.DataFrame(rows)
+    raw_features = raw_features.merge(sites_df, on="subject_id", how="left")
+    if raw_features["site"].isna().any():
+        missing = raw_features.loc[raw_features["site"].isna(), "subject_id"].tolist()
+        raise KeyError(
+            f"sites_csv missing site assignment for subjects: {missing}"
+        )
+
+    # ComBat cannot handle zero-variance columns (var_pooled = 0 → NaN divide).
+    # Split feature_cols into variable (harmonize) and constant (pass through).
+    var_feature_cols = [c for c in feature_cols if raw_features[c].std() > 0]
+    zero_var_cols = [c for c in feature_cols if raw_features[c].std() == 0]
+
+    harmonized = harmonize_combat(
+        raw_features, raw_features["site"], var_feature_cols,
+    )
+    # Re-attach zero-variance columns (unchanged) and restore original column order.
+    for c in zero_var_cols:
+        harmonized[c] = raw_features[c].to_numpy()
+    harmonized = harmonized[feature_cols]
+
+    final = pd.concat(
+        [raw_features[["subject_id", "site"]].reset_index(drop=True),
+         harmonized.reset_index(drop=True)],
+        axis=1,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.is_dir():
+        raise IsADirectoryError(
+            f"output_path must be a file, got a directory: {output_path}"
+        )
+    # Parquet preserves dtypes (float64 features stay float64) and is
+    # byte-deterministic with single-threaded snappy. AGENTS.md §6.
+    final.to_parquet(
+        output_path, index=False, engine="pyarrow", compression="snappy",
+    )
+    logger.info(
+        "Feature extraction complete: in=%d, out=%d, dropped=%d (%.2f%%)",
+        n_total, len(final), n_dropped, 100.0 * n_dropped / max(n_total, 1),
+    )
+    logger.info(
+        "Wrote processed features to %s (rows=%d, cols=%d)",
+        output_path, len(final), final.shape[1],
+    )
+
+
+if __name__ == "__main__":
+    # Day-3 CLI entrypoint — runs with default paths against `data/raw/mri/`.
+    # Expects `data/raw/mri/sites.csv` with columns `subject_id, site`.
+    # Argument parsing (argparse / click) will land in a later task.
+    #   python -m src.pipelines.mri_pipeline
+    run_pipeline()

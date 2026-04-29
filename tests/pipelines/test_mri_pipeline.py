@@ -1,6 +1,7 @@
 """Unit + integration tests for the MRI ComBat pipeline."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import nibabel as nib
@@ -15,6 +16,7 @@ from src.pipelines.mri_pipeline import (
     harmonize_combat,
     is_valid_volume,
     mask_brain,
+    run_pipeline,
 )
 
 
@@ -284,3 +286,95 @@ class TestHarmonizeCombat:
         bad_sites = sites.iloc[:5]
         with pytest.raises(ValueError, match=r"features has 6 rows but sites has 5 elements"):
             harmonize_combat(df, bad_sites, feature_cols)
+
+
+class TestRunPipeline:
+    def _stage_inputs(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        """Copy the committed MRI fixture into a tmp_path layout."""
+        raw_dir = tmp_path / "data" / "raw" / "mri"
+        proc_dir = tmp_path / "data" / "processed"
+        raw_dir.mkdir(parents=True)
+        proc_dir.mkdir(parents=True)
+        for src in FIXTURE_DIR.iterdir():
+            shutil.copy(src, raw_dir / src.name)
+        sites_csv = raw_dir / "sites.csv"
+        output_path = proc_dir / "mri_features.parquet"
+        return raw_dir, sites_csv, output_path
+
+    def test_end_to_end_writes_processed_parquet(self, tmp_path: Path) -> None:
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        assert output_path.exists()
+        df = pd.read_parquet(output_path)
+        assert len(df) == 6
+        assert "subject_id" in df.columns
+        assert "site" in df.columns
+        assert any(c.startswith("feat_roi") for c in df.columns)
+
+    def test_run_pipeline_preserves_float64_for_features(self, tmp_path: Path) -> None:
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        df = pd.read_parquet(output_path)
+        feat_cols = [c for c in df.columns if c.startswith("feat_")]
+        for c in feat_cols:
+            assert df[c].dtype == np.float64, f"{c} widened to {df[c].dtype}"
+
+    def test_run_pipeline_is_idempotent(self, tmp_path: Path) -> None:
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        first = output_path.read_bytes()
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        second = output_path.read_bytes()
+        assert first == second, "MRI pipeline output must be byte-deterministic"
+
+    def test_run_pipeline_reduces_site_gap(self, tmp_path: Path) -> None:
+        """End-to-end: ComBat must shrink the per-site mean gap in feat_roi0_mean."""
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        df = pd.read_parquet(output_path)
+        site_means = df.groupby("site")["feat_roi0_mean"].mean()
+        gap = abs(site_means["B"] - site_means["A"])
+        assert gap < 1.0, f"site gap after ComBat: {gap}"
+
+    def test_run_pipeline_raises_when_input_missing(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="MRI input directory not found"):
+            run_pipeline(
+                input_dir=tmp_path / "nope",
+                sites_csv=tmp_path / "sites.csv",
+                output_path=tmp_path / "out.parquet",
+            )
+
+    def test_run_pipeline_rejects_directory_as_output(self, tmp_path: Path) -> None:
+        raw_dir, sites_csv, _ = self._stage_inputs(tmp_path)
+        bad_output = tmp_path / "out_dir"
+        bad_output.mkdir()
+        with pytest.raises(IsADirectoryError, match="must be a file"):
+            run_pipeline(
+                input_dir=raw_dir, sites_csv=sites_csv, output_path=bad_output,
+            )
+
+    def test_run_pipeline_drops_invalid_volumes(self, tmp_path: Path) -> None:
+        """A NaN-containing volume must be logged + dropped, not silently included."""
+        raw_dir, sites_csv, output_path = self._stage_inputs(tmp_path)
+        # Corrupt subject_5 to contain NaN. Re-save in place.
+        bad = nib.load(raw_dir / "subject_5.nii.gz").get_fdata()
+        bad[0, 0, 0] = np.nan
+        nib.save(nib.Nifti1Image(bad, affine=np.eye(4)), raw_dir / "subject_5.nii.gz")
+
+        run_pipeline(
+            input_dir=raw_dir, sites_csv=sites_csv, output_path=output_path,
+        )
+        df = pd.read_parquet(output_path)
+        # 5 surviving valid subjects (subject_5 dropped).
+        assert len(df) == 5
+        assert "subject_5" not in df["subject_id"].tolist()
