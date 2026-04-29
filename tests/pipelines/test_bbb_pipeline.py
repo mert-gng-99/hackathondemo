@@ -26,8 +26,8 @@ class TestIsValidSmiles:
         assert is_valid_smiles("") is False
 
     def test_rejects_none(self) -> None:
-        assert is_valid_smiles(None) is False  # type: ignore[arg-type]
+        assert is_valid_smiles(None) is False
 
     def test_rejects_nan(self) -> None:
         import math
-        assert is_valid_smiles(math.nan) is False  # type: ignore[arg-type]
+        assert is_valid_smiles(math.nan) is False

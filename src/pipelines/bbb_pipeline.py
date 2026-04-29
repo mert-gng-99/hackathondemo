@@ -11,7 +11,6 @@ traceability (row count in / out / dropped), and idempotent output.
 from __future__ import annotations
 
 import math
-from typing import Any
 
 from rdkit import Chem, RDLogger
 
@@ -21,10 +20,16 @@ logger = get_logger(__name__)
 
 # Suppress RDKit's noisy C++-level warning stream; we surface our own
 # structured warnings via the project logger when a SMILES fails to parse.
+#
+# IMPORTANT: this call is process-global and irreversible from this module's
+# import. Any other code (other pipelines, the FastAPI surface, tests) that
+# relies on RDKit warnings will be affected. If a future modality needs
+# fine-grained RDKit log control, move this into an explicit
+# `configure_rdkit_logging()` helper invoked from `run_pipeline()` instead.
 RDLogger.DisableLog("rdApp.*")
 
 
-def is_valid_smiles(smiles: Any) -> bool:
+def is_valid_smiles(smiles: str | float | None) -> bool:
     """Return True iff `smiles` is a non-empty string parseable by RDKit.
 
     Handles the full set of garbage we expect from real CSVs:
