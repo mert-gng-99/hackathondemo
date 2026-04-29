@@ -11,7 +11,7 @@ and Docker shipping.
 | Day | Modality | Pipeline | Status |
 |-----|----------|----------|--------|
 | 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped — 30 tests green |
-| 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Planned (MNE-Python + ICA) |
+| 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped — 67 tests green |
 | 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Planned (ComBat harmonization) |
 
 ## Quick Start
@@ -23,7 +23,7 @@ and Docker shipping.
 # 1. Create venv and install
 python3.12 -m venv .venv312 && source .venv312/bin/activate && pip install -r requirements.txt
 
-# 2. Verify — expect 30 passed
+# 2. Verify — expect 67 passed
 pytest -v
 
 # 3. Smoke run with the bundled 6-row fixture
@@ -33,6 +33,17 @@ python -m src.pipelines.bbb_pipeline
 # 4. Inspect the output at data/processed/bbbp_features.parquet
 python -c "import pandas as pd; df = pd.read_parquet('data/processed/bbbp_features.parquet'); print(df.shape, df.dtypes.head())"
 ```
+
+Result lives at `data/processed/bbbp_features.parquet`.
+
+```bash
+# Smoke-test the EEG pipeline with the bundled fixture (5 ch synthetic .fif)
+mkdir -p data/raw
+cp tests/fixtures/eeg_sample.fif data/raw/eeg.fif
+python -m src.pipelines.eeg_pipeline
+```
+
+Result lives at `data/processed/eeg_features.parquet`.
 
 > **Real BBBP data:** not bundled (gitignored). Download from
 > [Kaggle](https://www.kaggle.com/datasets/priyanagda/bbbp) or
@@ -74,6 +85,19 @@ All four functions log via `src.core.logger.get_logger(__name__)` per AGENTS.md 
 satisfy the §4 Data Readiness contract (5 invariants: schema validity, domain validity,
 determinism, traceability, idempotence).
 
+## EEG Pipeline (Day 2)
+
+| Function | Purpose |
+|---|---|
+| `is_valid_epoch(epoch)` | Returns True iff the input is a finite, numeric, non-empty 2-D array. Rejects NaN/inf, non-numeric dtypes, lists/scalars. |
+| `bandpass_filter(raw, l_freq, h_freq)` | Non-mutating MNE bandpass (default 1–40 Hz). Raises ValueError on inverted frequency range. |
+| `remove_artifacts_with_ica(raw, eog_ch_name, n_components, random_state)` | Seeded ICA + correlation-based EOG component rejection. Skips gracefully (no-op + WARNING) on missing/typo EOG channel or NaN-contaminated data. |
+| `compute_features_from_epoch(epoch, sfreq)` | Per-channel PSD bands (delta/theta/alpha/beta/gamma) + 5 statistical moments (mean/std/var/skew/kurtosis). Constant-channel safe (NaN-cleaned). |
+| `extract_features_from_recording(raw, epoch_duration_s, eog_ch_name, n_components, random_state)` | Chains filter → ICA → epoching → feature extraction. Drops invalid epochs (logged WARNING with truncated index list). Returns 2-D `pd.DataFrame` with deterministic `feat_<channel>_psd_<band>` and `feat_<channel>_<stat>` columns. |
+| `run_pipeline(input_path, output_path, ...)` | End-to-end FIF/EDF → Parquet orchestrator. Idempotent; raises on missing input or directory output. |
+
+The pipeline is seeded (`random_state=97`) and produces byte-identical Parquet output for the same input — satisfying the §4 Determinism contract. Output is float64, preserved through the Parquet round-trip.
+
 ## Storage Format
 
 Pipeline outputs are written as Parquet files using the `pyarrow` engine with snappy
@@ -90,8 +114,7 @@ finishes in under 2 seconds on a 2024 laptop.
 
 ## Roadmap
 
-- **Day 2:** `eeg_pipeline.py` — load EDF/FIF, MNE-Python ICA artifact removal, write
-  `float32` features to Parquet.
+- **Day 2 (shipped):** `eeg_pipeline.py` — bandpass + MNE ICA artifact removal + PSD + statistical features → Parquet.
 - **Day 3:** `mri_pipeline.py` — load NIfTI volumes, ComBat harmonization
   (`neuroharmonize`) for site-level domain shift, write features to Parquet.
 - **Day 4+:** FastAPI surface in `src/api/`, MLflow experiment tracking, Docker images,
