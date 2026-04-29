@@ -50,7 +50,7 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 
 ## 3. Coding Standards
 
-- **Python 3.10+.** Use `from __future__ import annotations` when needed for forward refs.
+- **Python 3.10–3.12** (the pinned native-extension dependencies do not yet ship cp313+ wheels). Use `from __future__ import annotations` when needed for forward refs.
 - **Type hints are mandatory** on every public function/method (parameters and return).
 - **Modular structure.** One responsibility per function. If a function exceeds ~40 lines or 3 levels of nesting, split it.
 - **TDD is the default workflow.** Write the failing test first, watch it fail, then implement. Tests live in `tests/` mirroring `src/`.
