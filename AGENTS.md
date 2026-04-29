@@ -31,11 +31,11 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 ├── pytest.ini
 ├── data/
 │   ├── raw/                  # Untouched source data. NEVER train on this directly.
-│   └── processed/            # Pipeline output. Model-ready. Versioned outputs.
+│   └── processed/            # Pipeline output. Model-ready outputs (overwritten on each run; see §4).
 ├── src/
 │   ├── api/                  # FastAPI routers, request/response schemas
 │   ├── pipelines/            # One file per modality. Pure functions + a `run_pipeline()` entry.
-│   └── core/                 # Cross-cutting utilities: logging, config, MLflow helpers
+│   └── core/                 # Cross-cutting utilities: logging, config (MLflow helpers planned)
 └── tests/
     ├── core/
     ├── pipelines/
@@ -45,7 +45,7 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 **Rules:**
 - New modality → new file under `src/pipelines/`. No mixing modalities in one file.
 - Anything imported by 2+ pipelines → `src/core/`.
-- Never read from or write to paths outside `data/`. The `data/` boundary is the storage contract.
+- Pipeline code (`src/pipelines/`, `src/core/`) must not read from or write to any path outside `data/`. Test code may read `tests/fixtures/`. The `data/` boundary is the storage contract for production data.
 - `tests/fixtures/` holds CSV / numpy / DICOM blobs — do **not** add an `__init__.py` there.
 
 ## 3. Coding Standards
@@ -80,8 +80,8 @@ refactored into a pipeline.
 
 1. Add `tests/pipelines/test_<name>_pipeline.py` with the failing tests first.
 2. Create `src/pipelines/<name>_pipeline.py` exposing `run_pipeline(input_path: Path, output_path: Path) -> None`.
-3. Use `get_logger(__name__)` for all status output.
-4. Validate inputs and drop invalid rows with a logged warning.
+3. Use `get_logger(__name__)` for all status output (per §3).
+4. Apply the §4 Data Readiness contract: validate + drop invalid records with a logged WARNING (identifier + count), log row count in/out/dropped at INFO, write deterministically, and overwrite (do not append) on re-run.
 5. Write deterministic output to `output_path`.
 6. Document any new dependency in `requirements.txt` (pinned).
 7. Add a one-line entry to this file's pipeline table.
