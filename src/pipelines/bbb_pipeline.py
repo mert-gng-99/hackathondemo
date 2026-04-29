@@ -34,6 +34,11 @@ logger = get_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
 
 
+# Default I/O paths for the BBB pipeline. Override via run_pipeline() args.
+DEFAULT_INPUT = Path("data/raw/bbbp.csv")
+DEFAULT_OUTPUT = Path("data/processed/bbbp_features.csv")
+
+
 def is_valid_smiles(smiles: str | float | None) -> bool:
     """Return True iff `smiles` is a non-empty string parseable by RDKit.
 
@@ -180,10 +185,6 @@ def extract_features_from_dataframe(
     return out
 
 
-DEFAULT_INPUT = Path("data/raw/bbbp.csv")
-DEFAULT_OUTPUT = Path("data/processed/bbbp_features.csv")
-
-
 def run_pipeline(
     input_path: Path = DEFAULT_INPUT,
     output_path: Path = DEFAULT_OUTPUT,
@@ -207,6 +208,7 @@ def run_pipeline(
 
     Raises:
         FileNotFoundError: if `input_path` does not exist.
+        IsADirectoryError: if `output_path` resolves to an existing directory.
         KeyError: if `smiles_col` is missing from the CSV.
     """
     input_path = Path(input_path)
@@ -217,14 +219,18 @@ def run_pipeline(
 
     logger.info("Reading raw BBBP from %s", input_path)
     df = pd.read_csv(input_path)
-    logger.info("Loaded %d rows, columns=%s", len(df), list(df.columns))
+    logger.info("Loaded %d rows, %d columns", len(df), len(df.columns))
 
     features = extract_features_from_dataframe(
         df, smiles_col=smiles_col, n_bits=n_bits, radius=radius,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    features.to_csv(output_path, index=False)
+    if output_path.is_dir():
+        raise IsADirectoryError(
+            f"output_path must be a file, got a directory: {output_path}"
+        )
+    features.to_csv(output_path, index=False, lineterminator="\n")
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],
@@ -232,6 +238,7 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
-    # Production-ready CLI entrypoint:
+    # Day-1 CLI entrypoint — runs with default paths against `data/raw/bbbp.csv`.
+    # Argument parsing (argparse / click) will land in a later task.
     #   python -m src.pipelines.bbb_pipeline
     run_pipeline()

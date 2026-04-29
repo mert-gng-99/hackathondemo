@@ -186,3 +186,16 @@ class TestRunPipeline:
                 input_path=tmp_path / "nope.csv",
                 output_path=tmp_path / "out.csv",
             )
+
+    def test_run_pipeline_rejects_directory_as_output(self, tmp_path: Path) -> None:
+        raw_dir = tmp_path / "data" / "raw"
+        raw_dir.mkdir(parents=True)
+        input_path = raw_dir / "bbbp.csv"
+        shutil.copy(FIXTURE, input_path)
+
+        # output_path points at an existing directory, not a file
+        bad_output = tmp_path / "out_dir"
+        bad_output.mkdir()
+
+        with pytest.raises(IsADirectoryError, match="must be a file"):
+            run_pipeline(input_path=input_path, output_path=bad_output, n_bits=32)
