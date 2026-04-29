@@ -2,7 +2,7 @@
 
 Reads the Kaggle BBBP dataset (SMILES strings + binary penetration label),
 filters chemically invalid SMILES, computes Morgan circular fingerprints with
-RDKit, and writes a model-ready feature table to `data/processed/`.
+RDKit, and writes a model-ready Parquet feature table to `data/processed/`.
 
 This module follows the Data Readiness contract in AGENTS.md §4:
 schema validity, domain validity (drop invalid SMILES), determinism,
@@ -192,7 +192,7 @@ def run_pipeline(
     n_bits: int = 2048,
     radius: int = 2,
 ) -> None:
-    """Run the BBB pipeline end-to-end: raw CSV → processed feature CSV.
+    """Run the BBB pipeline end-to-end: raw CSV → processed feature Parquet.
 
     Reads the Kaggle BBBP CSV at `input_path`, validates and converts
     SMILES into Morgan fingerprints, and writes the model-ready table
