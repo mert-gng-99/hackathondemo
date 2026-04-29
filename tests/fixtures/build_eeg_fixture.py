@@ -8,6 +8,10 @@ Sampling rate: 256 Hz. Duration: 10 s.
 Synthetic content: a 10 Hz alpha sine on each EEG channel, plus a 1.5 Hz EOG
 "blink" injected on EOG061 and bleed-through on the frontal-most EEG channel
 (Cz) so ICA has something to detect.
+
+NOTE: byte-determinism of the .fif output is coupled to ``mne==1.7.1`` (pinned
+in requirements.txt). If that pin is upgraded, re-run this script and commit
+the rebuilt artifact alongside the dependency bump.
 """
 from __future__ import annotations
 
