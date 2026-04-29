@@ -81,3 +81,11 @@ class TestBandpassFilter:
         original_mean = raw.get_data().mean()
         _ = bandpass_filter(raw, l_freq=1.0, h_freq=40.0)
         assert raw.get_data().mean() == pytest.approx(original_mean, rel=1e-12)
+
+    def test_rejects_inverted_frequency_range(self) -> None:
+        """l_freq must be strictly < h_freq; otherwise raise instead of silently corrupting data."""
+        raw = self._load()
+        with pytest.raises(ValueError, match="must be strictly less than"):
+            bandpass_filter(raw, l_freq=40.0, h_freq=1.0)
+        with pytest.raises(ValueError, match="must be strictly less than"):
+            bandpass_filter(raw, l_freq=10.0, h_freq=10.0)

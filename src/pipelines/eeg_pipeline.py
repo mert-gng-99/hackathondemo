@@ -52,13 +52,24 @@ def bandpass_filter(
 
     Args:
         raw: Loaded `mne.io.BaseRaw` (call `.load_data()` first if from disk).
-        l_freq: Low-cut frequency in Hz.
+        l_freq: Low-cut frequency in Hz. Must be strictly less than `h_freq`.
         h_freq: High-cut frequency in Hz.
 
     Returns:
         A filtered copy of `raw`.
+
+    Raises:
+        ValueError: if `l_freq >= h_freq`. MNE silently produces a corrupted
+            band-stop-like result on inverted inputs, so we guard up front.
     """
+    if l_freq >= h_freq:
+        raise ValueError(
+            f"l_freq ({l_freq}) must be strictly less than h_freq ({h_freq})"
+        )
+
     out = raw.copy()
+    # picks="all" includes the EOG channel so the ICA step in
+    # remove_artifacts_with_ica sees a consistently-filtered EOG reference.
     out.filter(l_freq=l_freq, h_freq=h_freq, picks="all", verbose="ERROR")
     logger.info("Bandpass filter applied: %.1f-%.1f Hz", l_freq, h_freq)
     return out
