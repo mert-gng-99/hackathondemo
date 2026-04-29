@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import mne
 import numpy as np
+from mne.preprocessing import ICA
 
 from src.core.logger import get_logger
 
@@ -72,4 +73,70 @@ def bandpass_filter(
     # remove_artifacts_with_ica sees a consistently-filtered EOG reference.
     out.filter(l_freq=l_freq, h_freq=h_freq, picks="all", verbose="ERROR")
     logger.info("Bandpass filter applied: %.1f-%.1f Hz", l_freq, h_freq)
+    return out
+
+
+def remove_artifacts_with_ica(
+    raw: mne.io.BaseRaw,
+    eog_ch_name: str | None = None,
+    n_components: int = 15,
+    random_state: int = 97,
+) -> mne.io.BaseRaw:
+    """Remove EOG-like artifacts using MNE's ICA + EOG correlation.
+
+    Fits an ICA decomposition on `raw`, finds components whose time courses
+    correlate (Pearson) with the named EOG channel via `find_bads_eog` using
+    `measure="correlation"`, marks them as "bad" and reconstructs the signal
+    without them. Returns a copy; the input `raw` is unchanged.
+
+    If `eog_ch_name` is None or no bad components are found, returns a copy of
+    `raw` unchanged. This keeps the function safe to call on recordings
+    without an EOG reference.
+
+    Args:
+        raw: Loaded, ideally bandpass-filtered, `mne.io.BaseRaw`.
+        eog_ch_name: Name of the EOG channel for correlation-based detection.
+            None disables auto-rejection.
+        n_components: Cap on ICA components. For small recordings, MNE will
+            silently cap this at the rank of the data.
+        random_state: Seed for ICA's underlying solver. Required for §4
+            Determinism.
+
+    Returns:
+        A copy of `raw` with EOG-correlated ICA components removed.
+    """
+    out = raw.copy()
+    if eog_ch_name is None or eog_ch_name not in out.ch_names:
+        logger.info("ICA skipped: no EOG channel reference provided")
+        return out
+
+    # Cap n_components at the rank of the data to avoid solver complaints
+    # on small synthetic fixtures.
+    n_eeg = len(mne.pick_types(out.info, eeg=True, meg=False))
+    safe_n = min(n_components, max(n_eeg - 1, 1))
+
+    ica = ICA(
+        n_components=safe_n,
+        random_state=random_state,
+        max_iter="auto",
+        method="fastica",
+        verbose="ERROR",
+    )
+    ica.fit(out, picks="eeg", verbose="ERROR")
+    # Use raw correlation (not z-score) so we can reliably flag artifact
+    # components on small recordings where n_components < 10 makes the
+    # default z-score threshold algebraically unreachable.
+    bad_idx, _ = ica.find_bads_eog(
+        out,
+        ch_name=eog_ch_name,
+        measure="correlation",
+        threshold=0.9,
+        verbose="ERROR",
+    )
+    ica.exclude = list(bad_idx)
+    logger.info(
+        "ICA fit: n_components=%d, EOG-correlated rejected=%d",
+        safe_n, len(ica.exclude),
+    )
+    ica.apply(out, verbose="ERROR")
     return out

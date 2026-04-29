@@ -10,6 +10,7 @@ import pytest
 from src.pipelines.eeg_pipeline import (
     bandpass_filter,
     is_valid_epoch,
+    remove_artifacts_with_ica,
 )
 
 
@@ -89,3 +90,61 @@ class TestBandpassFilter:
             bandpass_filter(raw, l_freq=40.0, h_freq=1.0)
         with pytest.raises(ValueError, match="must be strictly less than"):
             bandpass_filter(raw, l_freq=10.0, h_freq=10.0)
+
+
+class TestRemoveArtifactsWithIca:
+    def _load(self) -> mne.io.BaseRaw:
+        return mne.io.read_raw_fif(FIXTURE, preload=True, verbose="ERROR")
+
+    def test_returns_raw_instance(self) -> None:
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        out = remove_artifacts_with_ica(
+            raw, eog_ch_name="EOG061", n_components=4, random_state=97,
+        )
+        assert isinstance(out, mne.io.BaseRaw)
+
+    def test_preserves_shape(self) -> None:
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        before = raw.get_data().shape
+        out = remove_artifacts_with_ica(
+            raw, eog_ch_name="EOG061", n_components=4, random_state=97,
+        )
+        assert out.get_data().shape == before
+
+    def test_reduces_eog_correlation_on_frontal_channel(self) -> None:
+        """ICA must reduce correlation between EOG and Cz (the bleed channel)."""
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        before = raw.get_data()
+        cz_idx = raw.ch_names.index("Cz")
+        eog_idx = raw.ch_names.index("EOG061")
+        corr_before = abs(np.corrcoef(before[cz_idx], before[eog_idx])[0, 1])
+
+        out = remove_artifacts_with_ica(
+            raw, eog_ch_name="EOG061", n_components=4, random_state=97,
+        )
+        after = out.get_data()
+        corr_after = abs(np.corrcoef(after[cz_idx], after[eog_idx])[0, 1])
+        # Allow for noise — but the dominant EOG bleed must be reduced.
+        assert corr_after < corr_before
+
+    def test_no_eog_channel_is_a_noop(self) -> None:
+        """Without an EOG reference, ICA can't auto-reject — should pass through."""
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        out = remove_artifacts_with_ica(
+            raw, eog_ch_name=None, n_components=4, random_state=97,
+        )
+        # Identical shape; data approximately equal (no rejection happened).
+        assert out.get_data().shape == raw.get_data().shape
+        np.testing.assert_allclose(
+            out.get_data(), raw.get_data(), rtol=1e-6, atol=1e-12
+        )
+
+    def test_is_deterministic_with_seed(self) -> None:
+        raw = bandpass_filter(self._load(), l_freq=1.0, h_freq=40.0)
+        a = remove_artifacts_with_ica(
+            raw, eog_ch_name="EOG061", n_components=4, random_state=97,
+        )
+        b = remove_artifacts_with_ica(
+            raw, eog_ch_name="EOG061", n_components=4, random_state=97,
+        )
+        np.testing.assert_allclose(a.get_data(), b.get_data(), rtol=1e-12, atol=1e-15)
