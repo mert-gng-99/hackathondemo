@@ -12,30 +12,25 @@ a logged WARNING), determinism (seeded ICA + sklearn RNG), traceability
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable
 
 import mne
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 from mne.preprocessing import ICA
 from scipy import signal as scipy_signal
 from scipy import stats as scipy_stats
 
+from src.core.determinism import pin_threads
 from src.core.logger import get_logger
+from src.core.storage import write_parquet
 
 logger = get_logger(__name__)
 
 # Pin BLAS / OpenMP / pyarrow to single-threaded mode so byte-determinism
-# (AGENTS.md §4 rule 3) holds across hardware. Without this, multi-threaded
-# floating-point reductions can reorder and produce non-bit-identical output.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-pa.set_cpu_count(1)
-pa.set_io_thread_count(1)
+# (AGENTS.md §4 rule 3) holds across hardware. See src.core.determinism.
+pin_threads()
 
 # Pearson-correlation threshold for EOG-component rejection in ICA.
 # Real-world EOG components typically score 0.8-0.95 against the EOG channel;
@@ -464,16 +459,9 @@ def run_pipeline(
         random_state=random_state,
     )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.is_dir():
-        raise IsADirectoryError(
-            f"output_path must be a file, got a directory: {output_path}"
-        )
     # Parquet preserves dtypes (float64 features stay float64) and is
     # byte-deterministic with single-threaded snappy. AGENTS.md §6.
-    features.to_parquet(
-        output_path, index=False, engine="pyarrow", compression="snappy",
-    )
+    write_parquet(features, output_path)
     logger.info(
         "Wrote processed features to %s (rows=%d, cols=%d)",
         output_path, len(features), features.shape[1],
