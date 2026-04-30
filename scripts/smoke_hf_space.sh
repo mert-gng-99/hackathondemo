@@ -13,12 +13,17 @@ FAIL=0
 
 probe() {
   local label="$1" url="$2" expect="$3" method="${4:-GET}"
-  local actual
+  local actual curl_exit=0
   if [[ "$method" == "POST" ]]; then
-    actual="$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
-      -H 'content-type: application/json' -d '{}' "$url")"
+    actual="$(curl -sS --max-time 15 -o /dev/null -w "%{http_code}" \
+      -X POST -H 'content-type: application/json' -d '{}' "$url")" || curl_exit=$?
   else
-    actual="$(curl -sS -o /dev/null -w "%{http_code}" "$url")"
+    actual="$(curl -sS --max-time 15 -o /dev/null -w "%{http_code}" "$url")" || curl_exit=$?
+  fi
+  if [[ "$curl_exit" -ne 0 ]]; then
+    printf "  FAIL %-40s curl error %s\n" "$label" "$curl_exit"
+    FAIL=1
+    return
   fi
   if [[ "$actual" == "$expect" ]]; then
     printf "  OK   %-40s %s\n" "$label" "$actual"
@@ -31,7 +36,7 @@ probe() {
 echo "Probing $BASE"
 probe "frontend root"             "$BASE/"                       "200" "GET"
 probe "streamlit health"          "$BASE/_stcore/health"          "200" "GET"
-probe "POST to unknown path is rejected" "$BASE/predict/bbb"     "403" "POST"
+probe "fastapi :8000 not publicly routed (POST)" "$BASE/predict/bbb"     "403" "POST"
 
 echo
 if [[ "$FAIL" == "0" ]]; then
