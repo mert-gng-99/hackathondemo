@@ -70,6 +70,14 @@ class CalibrationContext(BaseModel):
     support: int = Field(..., description="Number of held-out predictions falling in this bin")
 
 
+class ModelProvenance(BaseModel):
+    """Auditable provenance of the BBB model that produced a prediction."""
+    mlflow_run_id: str | None = Field(None, description="MLflow run id of the most recent training run, if any")
+    model_version: str = Field("v1", description="Manually-bumped model version label")
+    train_date: str | None = Field(None, description="ISO 8601 train timestamp from MLflow run start_time")
+    n_examples: int | None = Field(None, description="Training set size (from model._neurobridge_train_stats[\"n_train\"])")
+
+
 class BBBPredictResponse(BaseModel):
     """Decision-system payload: prediction + uncertainty + explanation + drift."""
     label: int
@@ -94,6 +102,10 @@ class BBBPredictResponse(BaseModel):
             "Number of confidence samples currently buffered in the worker's "
             "rolling window (max 100). Zero on a fresh worker."
         ),
+    )
+    provenance: ModelProvenance | None = Field(
+        None,
+        description="Auditing metadata (MLflow run id, train date, n_examples).",
     )
 
 

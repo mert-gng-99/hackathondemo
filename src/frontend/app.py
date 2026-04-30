@@ -457,6 +457,18 @@ def _render_mri_tab() -> None:
 def _render_prediction_card(result: dict) -> None:
     """Render a B2B-styled decision card: label badge + confidence + SHAP bars."""
     st.session_state["last_bbb_prediction"] = result
+    provenance = result.get("provenance")
+    if provenance is not None:
+        run_id = provenance.get("mlflow_run_id")
+        run_label = run_id[:8] if run_id else "—"
+        train_date = provenance.get("train_date") or "—"
+        n_examples = provenance.get("n_examples")
+        n_label = f"n={n_examples}" if n_examples else "n=—"
+        st.caption(
+            f"🔎 MLflow run **{run_label}** · "
+            f"Model **{provenance.get('model_version', 'v1')}** · "
+            f"trained {train_date} · {n_label}"
+        )
     label_text = _html.escape(str(result["label_text"]))
     badge_color = "#166534" if result["label"] == 1 else "#991B1B"
     badge_bg    = "#DCFCE7" if result["label"] == 1 else "#FEE2E2"

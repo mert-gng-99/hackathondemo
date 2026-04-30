@@ -160,6 +160,25 @@ class TestBBBPredictRoute:
         # By call 105, drift_z is computable (≥10 samples) — assert numeric.
         assert isinstance(last_body["drift_z"], float)
 
+    def test_predict_response_includes_provenance(self, _set_bbb_model_path):
+        """T2: provenance field is present in body (fields may be None)."""
+        from src.api import routes
+        routes.WORKER_CONFIDENCE_DEQUE.clear()
+
+        resp = client.post("/predict/bbb", json={"smiles": "CCO", "top_k": 3})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "provenance" in body
+        assert body["provenance"] is not None, "provenance should be populated even when MLflow is empty"
+        prov = body["provenance"]
+        assert "mlflow_run_id" in prov
+        assert "model_version" in prov
+        assert prov["model_version"] == "v1"  # default until bumped manually
+        assert "train_date" in prov
+        assert "n_examples" in prov
+        # n_examples comes from train_stats — must be a positive int for the test fixture
+        assert isinstance(prov["n_examples"], int) and prov["n_examples"] >= 1
+
     def test_returns_400_on_invalid_smiles(self, tmp_path: Path, monkeypatch):
         artifact = self._setup_model_artifact(tmp_path)
         monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))

@@ -25,6 +25,7 @@ from src.api.schemas import (
     EEGRequest,
     FeatureAttribution,
     HarmonizationRow,
+    ModelProvenance,
     MRIDiagnosticsRequest,
     MRIDiagnosticsResponse,
     MRIRequest,
@@ -160,6 +161,59 @@ def _compute_drift_z(model, confidence: float) -> tuple[float | None, int]:
     return float(drift_z), rolling_n
 
 
+_PROVENANCE_CACHE: ModelProvenance | None = None
+_MODEL_VERSION = "v1"  # bump manually per train cycle
+
+
+def _build_provenance(model) -> ModelProvenance:
+    """Look up the most recent BBB MLflow run; build a ModelProvenance.
+
+    Cached at module level so we hit MLflow once per worker. Failures (no
+    runs found, MLflow unreachable, NEUROBRIDGE_DISABLE_MLFLOW=1) all
+    degrade to a partial ModelProvenance with mlflow_run_id=None — the
+    badge still renders, just without a run id.
+    """
+    global _PROVENANCE_CACHE
+    if _PROVENANCE_CACHE is not None:
+        # Refresh n_examples each call from the model (cheap lookup).
+        n_train = None
+        stats = getattr(model, "_neurobridge_train_stats", None)
+        if stats is not None:
+            n_train = int(stats.get("n_train", 0)) or None
+        return _PROVENANCE_CACHE.model_copy(update={"n_examples": n_train})
+
+    run_id: str | None = None
+    train_date: str | None = None
+    if os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") != "1":
+        try:
+            runs = mlflow.search_runs(
+                experiment_names=["bbb_pipeline"],
+                max_results=1,
+                order_by=["start_time DESC"],
+            )
+            if len(runs):
+                row = runs.iloc[0]
+                run_id = str(row["run_id"])
+                ts = row.get("start_time")
+                if ts is not None:
+                    train_date = str(pd.Timestamp(ts).isoformat())
+        except Exception as e:  # broad: MLflow store unreachable, schema mismatch, etc.
+            logger.warning("MLflow provenance lookup failed: %s", e)
+
+    n_train = None
+    stats = getattr(model, "_neurobridge_train_stats", None)
+    if stats is not None:
+        n_train = int(stats.get("n_train", 0)) or None
+
+    _PROVENANCE_CACHE = ModelProvenance(
+        mlflow_run_id=run_id,
+        model_version=_MODEL_VERSION,
+        train_date=train_date,
+        n_examples=n_train,
+    )
+    return _PROVENANCE_CACHE
+
+
 def _matching_calibration_bin(model, confidence: float) -> CalibrationContext | None:
     """Pick the highest-threshold bin whose threshold <= confidence. None if no match or no metadata."""
     bins = getattr(model, "_neurobridge_calibration", None)
@@ -211,6 +265,7 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
     label_text = "permeable" if pred["label"] == 1 else "non-permeable"
     calibration = _matching_calibration_bin(model, pred["confidence"])
     drift_z, rolling_n = _compute_drift_z(model, pred["confidence"])
+    provenance = _build_provenance(model)
     return BBBPredictResponse(
         label=pred["label"],
         label_text=label_text,
@@ -219,6 +274,7 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         calibration=calibration,
         drift_z=drift_z,
         rolling_n=rolling_n,
+        provenance=provenance,
     )
 
 
