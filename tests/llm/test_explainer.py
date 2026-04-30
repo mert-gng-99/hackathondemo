@@ -68,3 +68,63 @@ class TestTemplateExplain:
         result = explain(_payload())
         assert result["source"] == "template"
         assert result["model"] is None
+
+
+class TestEEGTemplate:
+    """Day-8 T1A: deterministic EEG template path."""
+
+    def test_eeg_template_uses_pipeline_metrics(self, monkeypatch):
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        payload = {
+            "rows": 30,
+            "columns": 95,
+            "duration_sec": 4.32,
+            "mlflow_run_id": "abc12345",
+            "user_question": "Why were epochs dropped?",
+        }
+        result = explain(payload, modality="eeg")
+        assert result["source"] == "template"
+        assert result["model"] is None
+        rationale = result["rationale"]
+        assert "30" in rationale, "epoch count must appear"
+        assert "95" in rationale, "feature count must appear"
+        assert "4.3" in rationale, "duration must appear (1-decimal)"
+
+
+class TestMRITemplate:
+    """Day-8 T1A: deterministic MRI template path."""
+
+    def test_mri_template_uses_combat_metrics(self, monkeypatch):
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        payload = {
+            "site_gap_pre": 5.0004,
+            "site_gap_post": 0.0015,
+            "reduction_factor": 3290.0,
+            "n_subjects": 6,
+            "user_question": "Why does ComBat matter?",
+        }
+        result = explain(payload, modality="mri")
+        assert result["source"] == "template"
+        rationale = result["rationale"]
+        assert "5.00" in rationale or "5.0" in rationale, "pre-gap must appear"
+        assert "3290" in rationale or "3290×" in rationale, "reduction factor must appear"
+        assert "6" in rationale, "n_subjects must appear"
+
+
+class TestModalityDispatch:
+    """Day-8 T1A: explain(modality=…) routes to the right template."""
+
+    def test_unknown_modality_falls_back_to_bbb_template(self, monkeypatch):
+        """Defensive: an unknown modality string degrades gracefully (warn + bbb-style template)."""
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        payload = {
+            "smiles": "CCO",
+            "label": 1,
+            "label_text": "permeable",
+            "confidence": 0.82,
+            "top_features": [{"feature": "fp_1", "shap_value": 0.05}],
+        }
+        result = explain(payload, modality="unknown_xyz")
+        # Should not raise; should produce a non-empty rationale
+        assert result["source"] == "template"
+        assert result["rationale"], "rationale must be non-empty"
