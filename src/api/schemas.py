@@ -193,3 +193,38 @@ class MRIExplainResponse(BaseModel):
     rationale: str
     source: str
     model: str | None = None
+
+
+class MLflowRunSummary(BaseModel):
+    """One MLflow run row for the Experiments tab table."""
+    run_id: str
+    experiment_name: str
+    start_time: str  # ISO 8601
+    status: str
+    metrics: dict[str, float] = Field(default_factory=dict)
+    params: dict[str, str] = Field(default_factory=dict)
+
+
+class MLflowRunsResponse(BaseModel):
+    """Response for GET /experiments/runs."""
+    runs: list[MLflowRunSummary]
+
+
+class RunDiffRequest(BaseModel):
+    """Request body for POST /experiments/diff."""
+    run_id_a: str
+    run_id_b: str
+
+
+class RunDiffRow(BaseModel):
+    """One row of a run-vs-run diff: metric/param key + value pair."""
+    key: str
+    kind: str  # "metric" | "param"
+    value_a: str | None
+    value_b: str | None
+    differs: bool
+
+
+class RunDiffResponse(BaseModel):
+    """Response for POST /experiments/diff: side-by-side metric/param diff."""
+    rows: list[RunDiffRow]

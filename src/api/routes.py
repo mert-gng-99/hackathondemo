@@ -29,6 +29,8 @@ from src.api.schemas import (
     EEGRequest,
     FeatureAttribution,
     HarmonizationRow,
+    MLflowRunsResponse,
+    MLflowRunSummary,
     ModelProvenance,
     MRIDiagnosticsRequest,
     MRIDiagnosticsResponse,
@@ -36,6 +38,9 @@ from src.api.schemas import (
     MRIExplainResponse,
     MRIRequest,
     PipelineResponse,
+    RunDiffRequest,
+    RunDiffResponse,
+    RunDiffRow,
 )
 from src.core.logger import get_logger
 from src.llm import explainer as llm_explainer
@@ -46,6 +51,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/pipeline")
 predict_router = APIRouter(prefix="/predict")
 explain_router = APIRouter(prefix="/explain")
+experiments_router = APIRouter(prefix="/experiments")
 
 
 def _wrap(
@@ -402,3 +408,95 @@ def explain_mri(req: MRIExplainRequest) -> MRIExplainResponse:
         source=result["source"],
         model=result["model"],
     )
+
+
+@experiments_router.get("/runs", response_model=MLflowRunsResponse)
+def list_runs(limit: int = 50) -> MLflowRunsResponse:
+    """List recent MLflow runs across known experiments.
+
+    Returns an empty list when MLflow is disabled or unreachable.
+    """
+    if os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") == "1":
+        return MLflowRunsResponse(runs=[])
+
+    summaries: list[MLflowRunSummary] = []
+    for exp_name in ("bbb_pipeline", "eeg_pipeline", "mri_pipeline"):
+        try:
+            df = mlflow.search_runs(
+                experiment_names=[exp_name],
+                max_results=limit,
+                order_by=["start_time DESC"],
+            )
+        except Exception as e:  # broad: MLflow store unreachable / not found
+            logger.warning("MLflow lookup failed for %s: %s", exp_name, e)
+            continue
+        for _, row in df.iterrows():
+            metrics = {
+                col[len("metrics."):]: float(row[col])
+                for col in df.columns
+                if col.startswith("metrics.") and pd.notna(row[col])
+            }
+            params = {
+                col[len("params."):]: str(row[col])
+                for col in df.columns
+                if col.startswith("params.") and pd.notna(row[col])
+            }
+            summaries.append(
+                MLflowRunSummary(
+                    run_id=str(row["run_id"]),
+                    experiment_name=exp_name,
+                    start_time=str(pd.Timestamp(row["start_time"]).isoformat())
+                    if pd.notna(row.get("start_time"))
+                    else "",
+                    status=str(row.get("status", "UNKNOWN")),
+                    metrics=metrics,
+                    params=params,
+                )
+            )
+    summaries.sort(key=lambda s: s.start_time, reverse=True)
+    return MLflowRunsResponse(runs=summaries[:limit])
+
+
+@experiments_router.post("/diff", response_model=RunDiffResponse)
+def diff_runs(req: RunDiffRequest) -> RunDiffResponse:
+    """Side-by-side diff of two MLflow runs (metrics + params).
+
+    Returns 404 if either run id is not found in the local MLflow store.
+    Returns 200 with an empty rows list when MLflow is disabled.
+    """
+    if os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") == "1":
+        return RunDiffResponse(rows=[])
+
+    try:
+        run_a = mlflow.get_run(req.run_id_a)
+        run_b = mlflow.get_run(req.run_id_b)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Run not found: {e}")
+
+    metrics_a = run_a.data.metrics
+    metrics_b = run_b.data.metrics
+    params_a = run_a.data.params
+    params_b = run_b.data.params
+
+    rows: list[RunDiffRow] = []
+    for key in sorted(set(metrics_a) | set(metrics_b)):
+        va = metrics_a.get(key)
+        vb = metrics_b.get(key)
+        rows.append(
+            RunDiffRow(
+                key=key, kind="metric",
+                value_a=None if va is None else f"{va:.6g}",
+                value_b=None if vb is None else f"{vb:.6g}",
+                differs=(va != vb),
+            )
+        )
+    for key in sorted(set(params_a) | set(params_b)):
+        va = params_a.get(key)
+        vb = params_b.get(key)
+        rows.append(
+            RunDiffRow(
+                key=key, kind="param",
+                value_a=va, value_b=vb, differs=(va != vb),
+            )
+        )
+    return RunDiffResponse(rows=rows)

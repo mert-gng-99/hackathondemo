@@ -300,3 +300,34 @@ class TestExplainMRIRoute:
         assert out["source"] == "template"
         assert "3290" in out["rationale"]
         assert "6" in out["rationale"]
+
+
+class TestExperimentsRoutes:
+    """Day-8 T2A: GET /experiments/runs and POST /experiments/diff."""
+
+    def test_runs_endpoint_returns_list(self):
+        """GET /experiments/runs returns a runs list (may be empty if no MLflow data)."""
+        resp = client.get("/experiments/runs")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "runs" in body
+        assert isinstance(body["runs"], list)
+        # If any runs exist, each must have the expected keys
+        for run in body["runs"]:
+            for key in ("run_id", "experiment_name", "start_time", "status", "metrics", "params"):
+                assert key in run
+
+    def test_diff_endpoint_handles_unknown_runs_gracefully(self):
+        """POST /experiments/diff with bogus run ids returns 404 (not 500)."""
+        resp = client.post(
+            "/experiments/diff",
+            json={"run_id_a": "nonexistent_aaa", "run_id_b": "nonexistent_bbb"},
+        )
+        assert resp.status_code in (404, 200), (
+            f"unexpected status {resp.status_code}: {resp.text}"
+        )
+        # 404 is the documented contract; 200 with empty rows is acceptable too
+        # because some MLflow stores treat unknown ids as "empty result".
+        body = resp.json()
+        if resp.status_code == 200:
+            assert body.get("rows", []) == []
