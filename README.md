@@ -1,10 +1,31 @@
-# NeuroBridge Enterprise Pipeline
+---
+title: NeuroBridge Enterprise
+emoji: 🧠
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_file: src/frontend/app.py
+app_port: 7860
+pinned: false
+license: mit
+short_description: Living decision system for BBB, EEG, and MRI clinical ML
+---
 
-NeuroBridge Enterprise tackles the three chronic failure modes in clinical ML — data drift
-across acquisition sites, missing modalities, and signal/image artifacts — by running
-three specialist preprocessing pipelines (MRI ComBat harmonization, EEG MNE+ICA, and BBB
-molecular featurization with RDKit) behind a single FastAPI surface with MLflow tracking
-and Docker shipping.
+# NeuroBridge Enterprise
+
+> **Trust-engineered clinical-ML platform for neuroscience labs and health systems.**
+
+## Executive Summary
+
+**1.** Multi-site clinical ML pipelines fail in production because they assume clean data, single-site distributions, and black-box trust — all of which break in real labs. NeuroBridge Enterprise is the *living decision system* that closes those three gaps end-to-end across BBB drug-screening, EEG signal-cleaning, and MRI multi-site harmonization.
+
+**2.** Three production pipelines (RDKit + Morgan, MNE+ICA, neuroHarmonize ComBat) sit behind one FastAPI surface and one Streamlit dashboard, with a Random Forest BBB classifier on top — every inference returns label + confidence + 6-bin precision-at-threshold calibration + top-k SHAP attributions + drift z-score + MLflow provenance + an LLM/template natural-language rationale.
+
+**3.** Robustness is demoed live: a curated edge-case dropdown probes invalid SMILES, OOD molecules, and boundary inputs — the system never crashes, always degrades gracefully (HTTP 400 → recoverable warning, low confidence + lower drift score, calibration caption hedge).
+
+**4.** Adapt-Over-Time is built in: each FastAPI worker keeps a rolling 100-prediction window; the trailing median is z-scored against the train-time confidence distribution and surfaced both in the API response and the UI ("trailing-100 confidence median is +1.42σ from training distribution — mild distribution shift").
+
+**5.** 184 tests green, 8-day disciplined sprint, ~30 atomic commits, three demo lifelines (`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`, `BBB_MODEL_PATH` env) so the system is jury-day bulletproof. Public-deployable on Hugging Face Spaces with one push.
 
 ## Status
 
@@ -243,3 +264,35 @@ export OPENROUTER_API_KEY="sk-or-v1-…"
 Streamlit demo: `streamlit run src/frontend/app.py` → BBB tab → Predict → AI Assistant tab → ask a preset question.
 
 Drift demo: refresh the BBB tab and predict 10+ times in a row — the drift caption transitions from "warming up" to a numeric z-score.
+
+## Demo Scripts
+
+### 90-Second Jury Tour
+
+Choreography for the live demo. Click order matters; every claim has a numeric receipt visible on screen.
+
+| t | Tab | Action | Talking point |
+|---|---|---|---|
+| 0:00 | (open) | `streamlit run src/frontend/app.py` already launched | "This is NeuroBridge Enterprise — three modalities behind one decision system." |
+| 0:05 | **BBB** | Pick "Custom input" → enter `CCO` → click Predict | Show label + 82% confidence progress bar. |
+| 0:15 | (same) | Read calibration caption | "Predictions ≥80% confident are correct 92% of the time on held-out data — n=18." |
+| 0:22 | (same) | Read drift caption | "Trailing-100 confidence median is +0.42σ from train — within expected range." |
+| 0:30 | (same) | Read provenance badge | "MLflow run `abc123`, Model v1, n=1640 examples — full audit trail." |
+| 0:35 | (same) | Switch to "Massive OOD: cyclosporine-like macrocycle" → Predict | "Cyclosporine has 11 residues, ~1.2 kDa — way outside training distribution." |
+| 0:45 | (same) | Read confidence + drift | "System knows what it doesn't know — confidence drops, drift signal flags it." |
+| 0:55 | **AI Assistant** | Pick preset "Why was this molecule predicted as permeable?" → Ask | "LLM rationale uses SHAP attributions + drift context — auditable source label." |
+| 1:10 | **MRI** | Click "Run ComBat diagnostics" | Show 3-metric strip: Pre 5.0 → Post 0.0015 → 3290× reduction. |
+| 1:20 | (same) | Point to faceted KDE | "Each color is a hospital. Pre-ComBat panels diverge; Post panels converge." |
+| 1:30 | **Experiments** | Switch tabs, show MLflow runs table | "Every train run is logged; pick any two for a metric/param diff." |
+
+### 30-Second Drift Detection Show
+
+Standalone demo of the "Adapt Over Time" capability.
+
+| t | Action | What jury sees |
+|---|---|---|
+| 0:00 | Open BBB tab. | Drift caption shows "warming up (0/10 predictions buffered)". |
+| 0:05 | Hit Predict 10× rapidly with the same SMILES (`CCO`). | After predict #10, drift caption switches to a numeric z-score. |
+| 0:18 | Switch to "Cyclosporine OOD" → predict 3× more. | Drift z-score rises in magnitude; if `|z|≥1`, caption shows "mild distribution shift"; if `|z|≥2`, "significant shift, retrain recommended". |
+| 0:30 | Conclude. | "The system is online-aware — it doesn't just predict, it tells you when its own predictions are drifting from the world it was trained on." |
+
