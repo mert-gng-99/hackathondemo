@@ -30,8 +30,10 @@ class TestDockerfileHF:
         """The HF Dockerfile must:
         - Start FROM a Python base
         - Install requirements.txt
+        - Seed data/raw/bbbp.csv AND data/raw/eeg.fif from fixtures
         - Build the BBB model artifact at build time
-        - Set NEUROBRIDGE_DISABLE_MLFLOW=1 by default
+        - Run all three pipelines (BBB / EEG / MRI) so mlruns/ has one
+          run per modality available to /experiments/runs at startup
         - Expose port 7860 (HF Spaces convention)
         - Launch via supervisord
         """
@@ -41,10 +43,33 @@ class TestDockerfileHF:
         assert "src.models.bbb_model" in dockerfile_text, (
             "must build the BBB model artifact at image-build time"
         )
-        assert "neurobridge_disable_mlflow" in text, (
-            "must set NEUROBRIDGE_DISABLE_MLFLOW for HF deploy"
+        assert "src.pipelines.bbb_pipeline" in dockerfile_text, (
+            "must run BBB pipeline at build so mlruns/ has a BBB run"
+        )
+        assert "src.pipelines.eeg_pipeline" in dockerfile_text, (
+            "must run EEG pipeline at build so mlruns/ has an EEG run"
+        )
+        assert "src.pipelines.mri_pipeline" in dockerfile_text, (
+            "must run MRI pipeline at build so mlruns/ has an MRI run"
+        )
+        assert "tests/fixtures/eeg_sample.fif" in dockerfile_text, (
+            "must seed data/raw/eeg.fif from the bundled fixture so the "
+            "Signal tab works without user file upload"
         )
         assert "7860" in text, "must expose port 7860 (HF Spaces convention)"
         assert "supervisord" in text, (
             "must launch FastAPI + Streamlit via supervisord"
+        )
+
+    def test_dockerfile_does_not_disable_mlflow(self, dockerfile_text):
+        """The kill-switch was removed in 2026-04-30 — file-store mlruns/
+        is built into the image and is safe to expose on the read-only
+        demo. Re-introducing the kill-switch would silently kill the
+        Experiments tab and the BBB provenance strip."""
+        text = dockerfile_text.lower()
+        assert "neurobridge_disable_mlflow=1" not in text, (
+            "Dockerfile must NOT disable MLflow — that empties the "
+            "Experiments tab and blanks the BBB provenance strip. "
+            "If you need to disable MLflow at runtime, set the env "
+            "manually on the Space, do not bake it into the image."
         )
