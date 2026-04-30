@@ -482,6 +482,24 @@ def _render_prediction_card(result: dict) -> None:
     )
     st.progress(float(result["confidence"]))
 
+    # Trust caption — precision-at-confidence from held-out 20% test split.
+    # Silent skip when the API response has no calibration field (legacy models).
+    calibration = result.get("calibration")
+    if calibration is not None:
+        threshold_pct = round(calibration["threshold"] * 100)
+        precision_pct = round(calibration["precision"] * 100)
+        support = calibration["support"]
+        if support == 0:
+            st.caption(
+                "📊 Bu güven aralığında held-out test örneği yok — "
+                "kalibrasyon bilgisi mevcut değil."
+            )
+        else:
+            st.caption(
+                f"📊 Test set'te ≥{threshold_pct}% güven üreten tahminlerin "
+                f"precision'ı **{precision_pct}%** (n={support})."
+            )
+
     # SHAP attributions chart
     n_features = len(result["top_features"])
     st.markdown(
