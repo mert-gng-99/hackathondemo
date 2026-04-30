@@ -9,7 +9,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     DEPLOY_ENV=hf_spaces \
-    NEUROBRIDGE_DISABLE_MLFLOW=1 \
     NEUROBRIDGE_DISABLE_LLM=1
 
 # --- system deps for RDKit, nibabel, MNE ---
@@ -33,13 +32,17 @@ COPY src/ ./src/
 COPY tests/fixtures/ ./tests/fixtures/
 COPY supervisord.conf ./supervisord.conf
 
-# --- seed raw data from fixtures, run pipeline, train model at image-build time ---
-# data/raw/bbbp.csv is gitignored locally; we seed it from the test fixture so
-# the deploy is self-contained. First call to /predict/bbb is then instant.
+# Seed raw data from fixtures so the deployed Signal/Image/Molecule tabs
+# work on first click. Then run all three pipelines so mlruns/ contains
+# one run per modality — feeds /experiments/runs and the BBB provenance
+# strip. data/raw/* is gitignored locally so we cannot COPY it.
 RUN mkdir -p data/raw data/processed && \
     cp tests/fixtures/bbbp_sample.csv data/raw/bbbp.csv && \
+    cp tests/fixtures/eeg_sample.fif data/raw/eeg.fif && \
     python -m src.pipelines.bbb_pipeline && \
-    python -m src.models.bbb_model
+    python -m src.models.bbb_model && \
+    python -c "from pathlib import Path; from src.pipelines.eeg_pipeline import run_pipeline; run_pipeline(input_path=Path('tests/fixtures/eeg_sample.fif'), output_path=Path('data/processed/eeg_features.parquet'))" && \
+    python -c "from pathlib import Path; from src.pipelines.mri_pipeline import run_pipeline; run_pipeline(input_dir=Path('tests/fixtures/mri_sample'), sites_csv=Path('tests/fixtures/mri_sample/sites.csv'), output_path=Path('data/processed/mri_features.parquet'))"
 
 # --- HF Spaces convention ---
 EXPOSE 7860
