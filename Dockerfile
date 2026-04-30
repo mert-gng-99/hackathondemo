@@ -1,30 +1,45 @@
-# NeuroBridge Enterprise — multi-stage build, FastAPI + pipeline runtime image.
-# Python 3.12 because RDKit / scikit-learn / numpy pins ship cp310-cp312 wheels only.
-FROM python:3.12-slim AS runtime
+# NeuroBridge Enterprise — Hugging Face Spaces deployment image
+# Single container running FastAPI (port 8000) + Streamlit (port 7860).
+# HF Spaces routes :7860 to the public URL automatically.
 
-# System deps required by RDKit (libxrender, libxext) and nibabel/MNE
-# (libgomp). Slim base lacks them.
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEPLOY_ENV=hf_spaces \
+    NEUROBRIDGE_DISABLE_MLFLOW=1 \
+    NEUROBRIDGE_DISABLE_LLM=1
+
+# --- system deps for RDKit, nibabel, MNE ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxrender1 \
-    libxext6 \
+    build-essential \
     libgomp1 \
+    libxrender1 \
+    libsm6 \
+    libxext6 \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install dependencies first so the layer is cached when only source changes.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# --- Python deps ---
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
-COPY src/ src/
-COPY AGENTS.md README.md ./
+# --- project source ---
+COPY src/ ./src/
+COPY tests/fixtures/ ./tests/fixtures/
+COPY data/raw/ ./data/raw/
+COPY supervisord.conf ./supervisord.conf
 
-# Determinism env vars baked in (the pipelines re-pin defensively but
-# baking them avoids a brief race on container start).
-ENV OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1 \
-    PYTHONUNBUFFERED=1
+# --- build BBB model artifact at image-build time ---
+# This makes the first /predict/bbb call instant on cold start.
+RUN python -m src.models.bbb_model
 
-EXPOSE 8000
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --- HF Spaces convention ---
+EXPOSE 7860
+
+# --- launch FastAPI + Streamlit under supervisord ---
+CMD ["supervisord", "-n", "-c", "/app/supervisord.conf"]
