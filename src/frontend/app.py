@@ -1165,7 +1165,7 @@ def _render_bbb_tab() -> None:
             try:
                 result = _post("/predict/bbb", {"smiles": smiles, "top_k": top_k})
                 _render_prediction_card(result)
-                st.toast("Prediction complete", icon="✓")
+                st.toast("Prediction complete", icon="✅")
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 503:
                     st.error(
@@ -1220,7 +1220,7 @@ def _render_eeg_tab() -> None:
                 )
                 st.session_state["last_eeg_run"] = result
                 _render_result(result)
-                st.toast("EEG pipeline complete", icon="✓")
+                st.toast("EEG pipeline complete", icon="✅")
             except httpx.HTTPStatusError as e:
                 st.error(
                     f"Pipeline failed (HTTP {e.response.status_code}): "
@@ -1302,7 +1302,7 @@ def _render_mri_tab() -> None:
                     {"input_dir": mri_dir, "sites_csv": sites_csv},
                 )
                 _render_combat_diagnostics(result)
-                st.toast("Diagnostics complete", icon="✓")
+                st.toast("Diagnostics complete", icon="✅")
             except httpx.HTTPStatusError as e:
                 st.error(
                     f"Diagnostics failed (HTTP {e.response.status_code}): "
