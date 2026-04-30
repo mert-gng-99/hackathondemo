@@ -200,3 +200,34 @@ the core contract:
   data + site-gap KPIs (Pre, Post, Reduction factor). The UI renders
   a faceted altair density plot — visual proof that ComBat removes
   site-driven domain shift.
+
+## 10. Drift Surface (Day 7)
+
+Each predict route maintains a per-worker rolling window of recent
+prediction confidences (`collections.deque(maxlen=100)`). Train-time
+median + std are stashed on `model._neurobridge_train_stats` (joblib
+roundtrip-safe). The drift z-score is `(rolling_median − train_median) /
+max(train_std, 1e-9)`, computed only when the buffer holds ≥10 samples
+AND the model has the train-stats attribute. The `/predict/bbb`
+response carries `drift_z: float | None` and `rolling_n: int`. The UI
+renders a one-line caption with a magnitude tag (in-band, mild,
+significant). Worker restart clears the deque; this is acceptable for
+demo and removes the audit-trail concern.
+
+## 11. LLM Explainer Surface (Day 7)
+
+`src/llm/explainer.py` is the single entry point for natural-language
+rationales. `explain(payload)` always returns `{rationale, source,
+model}`. The deterministic template path is the source of truth for
+tests; the LLM path is OpenRouter via the `openai==1.51.0` SDK using
+`meta-llama/llama-3.2-3b-instruct:free`. Two env knobs control the
+behavior:
+
+- `OPENROUTER_API_KEY` — when absent, fallback to template.
+- `NEUROBRIDGE_DISABLE_LLM=1` — hard kill-switch; force template even
+  if a key is set. Use this for demo days when you want fully
+  deterministic, reproducible rationales.
+
+The `POST /explain/bbb` endpoint mirrors this contract. Pydantic
+enforces a non-empty `top_features` list (422 on empty); every other
+failure mode degrades to template + WARNING log + `source="template"`.

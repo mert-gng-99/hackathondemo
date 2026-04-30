@@ -16,6 +16,7 @@ and Docker shipping.
 | 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped — 142 tests green |
 | 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped — 158 tests green |
 | 6 | Final Polish & Demo Features (Edge cases + Calibration + ComBat viz) | Calibration metadata + edge-case probes + `POST /pipeline/mri/diagnostics` | Shipped — 165 tests green |
+| 7 | Final 5% (Drift, Traceability & Agents) | Per-worker drift z-score + MLflow provenance badge + `POST /explain/bbb` (LLM + template fallback) + AI Assistant tab | Shipped — 175 tests green |
 
 ## Quick Start
 
@@ -194,3 +195,51 @@ finishes in under 4 seconds on a 2024 laptop.
 - **BBB downstream model (classifier + SHAP explainer + trainer CLI):** [`src/models/bbb_model.py`](src/models/bbb_model.py) + [`tests/models/test_bbb_model.py`](tests/models/test_bbb_model.py) (12 tests)
 - **Day-6 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md`](docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md)
 - **MRI ComBat diagnostics surface (pre/post site-gap KPIs):** `POST /pipeline/mri/diagnostics` — see [`src/api/routes.py`](src/api/routes.py) + [`src/pipelines/mri_pipeline.py`](src/pipelines/mri_pipeline.py)
+- **Day-7 design spec:** [`docs/superpowers/specs/2026-05-05-day7-drift-traceability-agents-design.md`](docs/superpowers/specs/2026-05-05-day7-drift-traceability-agents-design.md)
+- **Day-7 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-05-day7-drift-traceability-agents.md`](docs/superpowers/plans/2026-05-05-day7-drift-traceability-agents.md)
+- **New surface:** `POST /explain/bbb` — natural-language rationale (LLM + deterministic fallback)
+- **New surface:** `drift_z` / `rolling_n` / `provenance` fields in `POST /predict/bbb` response
+
+## Day 7 — Demo Recipe
+
+Pre-flight (one terminal):
+
+```bash
+# Start API with deterministic explainer (no LLM key needed)
+NEUROBRIDGE_DISABLE_LLM=1 BBB_MODEL_PATH=data/processed/bbb_model.joblib \
+  uvicorn src.api.main:app --port 8000
+```
+
+Predict + explain (other terminal):
+
+```bash
+# 1) Predict — body now carries drift_z, rolling_n, provenance
+curl -s -X POST http://localhost:8000/predict/bbb \
+  -H "Content-Type: application/json" \
+  -d '{"smiles": "CCO", "top_k": 5}' | jq
+
+# 2) Explain — feed the predict response back as the explain payload
+curl -s -X POST http://localhost:8000/explain/bbb \
+  -H "Content-Type: application/json" \
+  -d '{
+    "smiles": "CCO",
+    "label": 1,
+    "label_text": "permeable",
+    "confidence": 0.82,
+    "top_features": [
+      {"feature": "fp_341", "shap_value": 0.045},
+      {"feature": "fp_902", "shap_value": -0.031}
+    ],
+    "drift_z": 0.42,
+    "user_question": "Why permeable?"
+  }' | jq
+
+# 3) Same call but with LLM enabled (set the key first)
+unset NEUROBRIDGE_DISABLE_LLM
+export OPENROUTER_API_KEY="sk-or-v1-…"
+# Repeat the curl above; expect "source": "llm" and a model name.
+```
+
+Streamlit demo: `streamlit run src/frontend/app.py` → BBB tab → Predict → AI Assistant tab → ask a preset question.
+
+Drift demo: refresh the BBB tab and predict 10+ times in a row — the drift caption transitions from "warming up" to a numeric z-score.
