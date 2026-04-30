@@ -71,7 +71,7 @@ class CalibrationContext(BaseModel):
 
 
 class BBBPredictResponse(BaseModel):
-    """Decision-system payload: prediction + uncertainty + explanation."""
+    """Decision-system payload: prediction + uncertainty + explanation + drift."""
     label: int
     label_text: str = Field(..., description="'permeable' or 'non-permeable'")
     confidence: float
@@ -79,6 +79,21 @@ class BBBPredictResponse(BaseModel):
     calibration: CalibrationContext | None = Field(
         None,
         description="Statistical context: how often the model is right when this confident on held-out data.",
+    )
+    drift_z: float | None = Field(
+        None,
+        description=(
+            "Z-score of the trailing-100 confidence median against the "
+            "train-time median; None when warming up (<10 samples) or "
+            "when the model lacks _neurobridge_train_stats."
+        ),
+    )
+    rolling_n: int = Field(
+        0,
+        description=(
+            "Number of confidence samples currently buffered in the worker's "
+            "rolling window (max 100). Zero on a fresh worker."
+        ),
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -89,8 +90,14 @@ class TestBBBPredictRoute:
         bbb_model.save(model, artifact)
         return artifact
 
+    @pytest.fixture
+    def _set_bbb_model_path(self, tmp_path: Path, monkeypatch):
+        """Build a model artifact and point BBB_MODEL_PATH at it for the test."""
+        artifact = self._setup_model_artifact(tmp_path)
+        monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))
+        return artifact
+
     def test_returns_200_with_prediction_and_attributions(self, tmp_path: Path, monkeypatch):
-        import pytest
         artifact = self._setup_model_artifact(tmp_path)
         monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))
 
@@ -119,6 +126,39 @@ class TestBBBPredictRoute:
         assert 0.0 <= cal["precision"] <= 1.0
         assert isinstance(cal["support"], int)
         assert cal["support"] >= 0
+
+    def test_predict_response_includes_drift_z_and_rolling_n(
+        self, _set_bbb_model_path,
+    ):
+        """T1B: drift_z and rolling_n keys must always appear in the body."""
+        # Reset deque before this test so rolling_n starts deterministic.
+        from src.api import routes
+        routes.WORKER_CONFIDENCE_DEQUE.clear()
+
+        resp = client.post("/predict/bbb", json={"smiles": "CCO", "top_k": 5})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "drift_z" in body
+        assert "rolling_n" in body
+        # First request: buffer has 1 sample (just appended), so warming up.
+        assert body["rolling_n"] == 1
+        assert body["drift_z"] is None  # <10 samples = warming up
+
+    def test_predict_deque_rolls_at_100(self, _set_bbb_model_path):
+        """T1B: after 100 predictions, deque caps at maxlen=100 (rolls)."""
+        from src.api import routes
+        routes.WORKER_CONFIDENCE_DEQUE.clear()
+        # Fire 105 calls; final rolling_n must be 100, not 105.
+        last_body = None
+        for _ in range(105):
+            resp = client.post(
+                "/predict/bbb", json={"smiles": "CCO", "top_k": 3},
+            )
+            assert resp.status_code == 200
+            last_body = resp.json()
+        assert last_body["rolling_n"] == 100
+        # By call 105, drift_z is computable (≥10 samples) — assert numeric.
+        assert isinstance(last_body["drift_z"], float)
 
     def test_returns_400_on_invalid_smiles(self, tmp_path: Path, monkeypatch):
         artifact = self._setup_model_artifact(tmp_path)

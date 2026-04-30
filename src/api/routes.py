@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -130,6 +131,35 @@ def _bbb_model_path() -> Path:
     return Path(os.environ.get("BBB_MODEL_PATH", str(_DEFAULT_BBB_MODEL_PATH)))
 
 
+# Per-worker rolling window of recent prediction confidences.
+# Cleared on worker restart; multi-worker setups have independent windows.
+WORKER_CONFIDENCE_DEQUE: deque[float] = deque(maxlen=100)
+_DRIFT_MIN_SAMPLES = 10
+
+
+def _compute_drift_z(model, confidence: float) -> tuple[float | None, int]:
+    """Append `confidence` to the worker deque and compute the drift z-score.
+
+    Returns (drift_z, rolling_n). drift_z is None until both:
+      (1) the deque has at least `_DRIFT_MIN_SAMPLES` samples, AND
+      (2) the model has `_neurobridge_train_stats` attached.
+
+    z = (rolling_median - train_median) / max(train_std, 1e-9)
+    """
+    import statistics
+
+    WORKER_CONFIDENCE_DEQUE.append(float(confidence))
+    rolling_n = len(WORKER_CONFIDENCE_DEQUE)
+    stats = getattr(model, "_neurobridge_train_stats", None)
+    if rolling_n < _DRIFT_MIN_SAMPLES or stats is None:
+        return None, rolling_n
+    rolling_median = statistics.median(WORKER_CONFIDENCE_DEQUE)
+    train_median = float(stats["median"])
+    train_std = max(float(stats["std"]), 1e-9)
+    drift_z = (rolling_median - train_median) / train_std
+    return float(drift_z), rolling_n
+
+
 def _matching_calibration_bin(model, confidence: float) -> CalibrationContext | None:
     """Pick the highest-threshold bin whose threshold <= confidence. None if no match or no metadata."""
     bins = getattr(model, "_neurobridge_calibration", None)
@@ -180,12 +210,15 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
 
     label_text = "permeable" if pred["label"] == 1 else "non-permeable"
     calibration = _matching_calibration_bin(model, pred["confidence"])
+    drift_z, rolling_n = _compute_drift_z(model, pred["confidence"])
     return BBBPredictResponse(
         label=pred["label"],
         label_text=label_text,
         confidence=pred["confidence"],
         top_features=[FeatureAttribution(**a) for a in attributions],
         calibration=calibration,
+        drift_z=drift_z,
+        rolling_n=rolling_n,
     )
 
 
