@@ -6,7 +6,7 @@ can render a single result card regardless of modality.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BBBRequest(BaseModel):
@@ -72,6 +72,10 @@ class CalibrationContext(BaseModel):
 
 class ModelProvenance(BaseModel):
     """Auditable provenance of the BBB model that produced a prediction."""
+    # Disable the `model_` protected-namespace check so `model_version` doesn't
+    # trip Pydantic v2's UserWarning (which our DoD gate escalates to error).
+    model_config = ConfigDict(protected_namespaces=())
+
     mlflow_run_id: str | None = Field(None, description="MLflow run id of the most recent training run, if any")
     model_version: str = Field("v1", description="Manually-bumped model version label")
     train_date: str | None = Field(None, description="ISO 8601 train timestamp from MLflow run start_time")
