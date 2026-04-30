@@ -46,3 +46,26 @@ class PipelineResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     pipelines: list[str]
+
+
+class BBBPredictRequest(BaseModel):
+    """Single-molecule BBB-permeability prediction request."""
+    smiles: str = Field(..., description="SMILES string; e.g. 'CCO' for ethanol")
+    top_k: int = Field(5, ge=1, le=20, description="Top-k SHAP features to return")
+
+
+class FeatureAttribution(BaseModel):
+    """A single SHAP attribution: which fingerprint bit contributed and by how much."""
+    feature: str = Field(..., description="Fingerprint column name, e.g. 'fp_1234'")
+    shap_value: float = Field(
+        ...,
+        description="Signed SHAP value for the predicted class (positive pushed model toward, negative away)",
+    )
+
+
+class BBBPredictResponse(BaseModel):
+    """Decision-system payload: prediction + uncertainty + explanation."""
+    label: int
+    label_text: str = Field(..., description="'permeable' or 'non-permeable'")
+    confidence: float
+    top_features: list[FeatureAttribution]

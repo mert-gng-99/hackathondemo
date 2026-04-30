@@ -70,3 +70,57 @@ class TestMRIRoute:
         )
         assert resp.status_code == 200
         assert resp.json()["rows"] > 0
+
+
+class TestBBBPredictRoute:
+    def _setup_model_artifact(self, tmp_path: Path) -> Path:
+        """Build features + train + save a tiny model. Returns artifact path."""
+        from src.pipelines import bbb_pipeline
+        from src.models import bbb_model
+        import pandas as pd
+        features_path = tmp_path / "features.parquet"
+        bbb_pipeline.run_pipeline(
+            input_path=_FIXTURES / "bbbp_sample.csv",
+            output_path=features_path,
+        )
+        df = pd.read_parquet(features_path)
+        model = bbb_model.train(df, label_col="p_np", n_estimators=10, random_state=42)
+        artifact = tmp_path / "bbb_model.joblib"
+        bbb_model.save(model, artifact)
+        return artifact
+
+    def test_returns_200_with_prediction_and_attributions(self, tmp_path: Path, monkeypatch):
+        artifact = self._setup_model_artifact(tmp_path)
+        monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))
+
+        resp = client.post(
+            "/predict/bbb",
+            json={"smiles": "CCO", "top_k": 5},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["label"] in (0, 1)
+        assert body["label_text"] in ("permeable", "non-permeable")
+        assert 0.0 <= body["confidence"] <= 1.0
+        assert len(body["top_features"]) == 5
+        for f in body["top_features"]:
+            assert f["feature"].startswith("fp_")
+            assert isinstance(f["shap_value"], float)
+
+    def test_returns_400_on_invalid_smiles(self, tmp_path: Path, monkeypatch):
+        artifact = self._setup_model_artifact(tmp_path)
+        monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))
+
+        resp = client.post(
+            "/predict/bbb",
+            json={"smiles": "this_is_not_a_smiles", "top_k": 5},
+        )
+        assert resp.status_code == 400
+
+    def test_returns_503_when_artifact_missing(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("BBB_MODEL_PATH", str(tmp_path / "does_not_exist.joblib"))
+        resp = client.post(
+            "/predict/bbb",
+            json={"smiles": "CCO", "top_k": 5},
+        )
+        assert resp.status_code == 503

@@ -7,6 +7,7 @@ codes: FileNotFoundError -> 404, ValueError -> 400, anything else -> 500.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -16,16 +17,21 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from src.api.schemas import (
+    BBBPredictRequest,
+    BBBPredictResponse,
     BBBRequest,
     EEGRequest,
+    FeatureAttribution,
     MRIRequest,
     PipelineResponse,
 )
 from src.core.logger import get_logger
+from src.models import bbb_model
 from src.pipelines import bbb_pipeline, eeg_pipeline, mri_pipeline
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/pipeline")
+predict_router = APIRouter(prefix="/predict")
 
 
 def _wrap(
@@ -107,4 +113,51 @@ def run_mri(req: MRIRequest) -> PipelineResponse:
             sites_csv=Path(req.sites_csv),
             output_path=Path(req.output_path),
         ),
+    )
+
+
+# Default artifact location. Overridable via BBB_MODEL_PATH env var so tests
+# can point at a tmp-built model without touching production paths.
+_DEFAULT_BBB_MODEL_PATH = Path("data/processed/bbb_model.joblib")
+
+
+def _bbb_model_path() -> Path:
+    """Return the BBB model artifact path, overridable via BBB_MODEL_PATH env var."""
+    return Path(os.environ.get("BBB_MODEL_PATH", str(_DEFAULT_BBB_MODEL_PATH)))
+
+
+@predict_router.post("/bbb", response_model=BBBPredictResponse)
+def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
+    """Predict BBB permeability + return SHAP attributions for one SMILES.
+
+    Returns 503 if the model artifact is missing (operator hasn't run the
+    trainer CLI yet); 400 on invalid SMILES; 200 with the decision payload
+    on success.
+    """
+    artifact = _bbb_model_path()
+    if not artifact.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"BBB model artifact not available at {artifact}. "
+                f"Run `python -m src.models.bbb_model` to train it."
+            ),
+        )
+    try:
+        model = bbb_model.load(artifact)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    try:
+        pred = bbb_model.predict_with_proba(model, req.smiles)
+        attributions = bbb_model.explain_prediction(model, req.smiles, top_k=req.top_k)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    label_text = "permeable" if pred["label"] == 1 else "non-permeable"
+    return BBBPredictResponse(
+        label=pred["label"],
+        label_text=label_text,
+        confidence=pred["confidence"],
+        top_features=[FeatureAttribution(**a) for a in attributions],
     )

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from src.api.routes import router as pipeline_router
+from src.api.routes import router as pipeline_router, predict_router
 from src.api.schemas import HealthResponse
 
 app = FastAPI(
@@ -16,6 +16,7 @@ app = FastAPI(
 )
 
 app.include_router(pipeline_router)
+app.include_router(predict_router)
 
 
 @app.get("/health", response_model=HealthResponse)
