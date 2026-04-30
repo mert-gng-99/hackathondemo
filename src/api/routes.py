@@ -20,6 +20,7 @@ from src.api.schemas import (
     BBBPredictRequest,
     BBBPredictResponse,
     BBBRequest,
+    CalibrationContext,
     EEGRequest,
     FeatureAttribution,
     MRIRequest,
@@ -126,6 +127,26 @@ def _bbb_model_path() -> Path:
     return Path(os.environ.get("BBB_MODEL_PATH", str(_DEFAULT_BBB_MODEL_PATH)))
 
 
+def _matching_calibration_bin(model, confidence: float) -> CalibrationContext | None:
+    """Pick the highest-threshold bin whose threshold <= confidence. None if no match or no metadata."""
+    bins = getattr(model, "_neurobridge_calibration", None)
+    if not bins:
+        return None
+    matched = None
+    for bin_ in bins:
+        if bin_["threshold"] <= confidence:
+            matched = bin_
+        else:
+            break
+    if matched is None:
+        return None
+    return CalibrationContext(
+        threshold=matched["threshold"],
+        precision=matched["precision"],
+        support=matched["support"],
+    )
+
+
 @predict_router.post("/bbb", response_model=BBBPredictResponse)
 def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
     """Predict BBB permeability + return SHAP attributions for one SMILES.
@@ -155,9 +176,11 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         raise HTTPException(status_code=400, detail=str(e))
 
     label_text = "permeable" if pred["label"] == 1 else "non-permeable"
+    calibration = _matching_calibration_bin(model, pred["confidence"])
     return BBBPredictResponse(
         label=pred["label"],
         label_text=label_text,
         confidence=pred["confidence"],
         top_features=[FeatureAttribution(**a) for a in attributions],
+        calibration=calibration,
     )

@@ -90,6 +90,7 @@ class TestBBBPredictRoute:
         return artifact
 
     def test_returns_200_with_prediction_and_attributions(self, tmp_path: Path, monkeypatch):
+        import pytest
         artifact = self._setup_model_artifact(tmp_path)
         monkeypatch.setenv("BBB_MODEL_PATH", str(artifact))
 
@@ -106,6 +107,18 @@ class TestBBBPredictRoute:
         for f in body["top_features"]:
             assert f["feature"].startswith("fp_")
             assert isinstance(f["shap_value"], float)
+        # Day-6 calibration assertions: trained test fixture model has
+        # _neurobridge_calibration metadata, so calibration must be populated.
+        assert body["calibration"] is not None
+        cal = body["calibration"]
+        valid_thresholds = [0.50, 0.60, 0.70, 0.75, 0.80, 0.90]
+        assert any(
+            cal["threshold"] == pytest.approx(t) for t in valid_thresholds
+        ), f"threshold {cal['threshold']} not in {valid_thresholds}"
+        assert cal["threshold"] <= body["confidence"]
+        assert 0.0 <= cal["precision"] <= 1.0
+        assert isinstance(cal["support"], int)
+        assert cal["support"] >= 0
 
     def test_returns_400_on_invalid_smiles(self, tmp_path: Path, monkeypatch):
         artifact = self._setup_model_artifact(tmp_path)

@@ -63,9 +63,20 @@ class FeatureAttribution(BaseModel):
     )
 
 
+class CalibrationContext(BaseModel):
+    """Precision-at-confidence-threshold bin matched to a single prediction."""
+    threshold: float = Field(..., description="Lowest confidence threshold this bin covers (0.0-1.0)")
+    precision: float = Field(..., description="Precision on the held-out test set among predictions ≥ threshold")
+    support: int = Field(..., description="Number of held-out predictions falling in this bin")
+
+
 class BBBPredictResponse(BaseModel):
     """Decision-system payload: prediction + uncertainty + explanation."""
     label: int
     label_text: str = Field(..., description="'permeable' or 'non-permeable'")
     confidence: float
     top_features: list[FeatureAttribution]
+    calibration: CalibrationContext | None = Field(
+        None,
+        description="Statistical context: how often the model is right when this confident on held-out data.",
+    )
