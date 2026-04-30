@@ -305,11 +305,62 @@ def _render_bbb_tab() -> None:
         "explaining the decision.",
     )
 
+    EDGE_CASES = {
+        "Custom input (default)": {
+            "smiles": "CCO",
+            "label": "Ethanol — small, drug-like, BBB-permeable",
+            "expectation": "High confidence, label = permeable",
+        },
+        "Invalid SMILES (parse-error path)": {
+            "smiles": "this_is_not_a_valid_molecule_at_all_!!",
+            "label": "Garbage string — should not parse",
+            "expectation": "API returns HTTP 400 with parse error; UI shows recoverable warning",
+        },
+        "Empty string (boundary)": {
+            "smiles": "",
+            "label": "Empty input — boundary condition",
+            "expectation": "Pydantic accepts empty; API returns 400 (RDKit cannot parse)",
+        },
+        "Massive OOD: cyclosporine-like macrocycle": {
+            "smiles": (
+                "CC[C@H](C)[C@@H]1NC(=O)[C@H](CC(C)C)N(C)C(=O)[C@H](CC(C)C)N(C)C(=O)"
+                "[C@@H]2CCCN2C(=O)[C@H](C(C)C)NC(=O)[C@H]([C@@H](C)CC)N(C)C(=O)"
+                "[C@H](C)NC(=O)[C@H](C)NC(=O)[C@H](CC(C)C)N(C)C(=O)[C@@H](NC(=O)"
+                "[C@H](CC(C)C)N(C)C(=O)CN(C)C1=O)C(C)C"
+            ),
+            "label": "Cyclosporine — 11-residue macrocycle (~1.2 kDa)",
+            "expectation": (
+                "Far outside training distribution; model should hedge "
+                "with low confidence (well-calibrated systems don't "
+                "pretend to know)."
+            ),
+        },
+        "OOD: heavy halogenated aromatic": {
+            "smiles": "Fc1c(F)c(F)c(c(F)c1F)c2c(F)c(F)c(F)c(F)c2F",
+            "label": "Decafluorobiphenyl — extreme halogen density",
+            "expectation": "Rare scaffold; expect lowered confidence vs ethanol",
+        },
+    }
+
+    case_name = st.selectbox(
+        "Test Edge Cases",
+        options=list(EDGE_CASES.keys()),
+        index=0,
+        key="bbb_case",
+        help=(
+            "Pick a robustness probe. Each case demonstrates how the "
+            "system handles a real-world failure mode — invalid input, "
+            "out-of-distribution molecules, or boundary conditions."
+        ),
+    )
+    case = EDGE_CASES[case_name]
+    st.caption(f"**Probe:** {case['label']}  ·  **Expected:** {case['expectation']}")
+
     smiles = st.text_input(
         "SMILES string",
-        value="CCO",
+        value=case["smiles"],
         key="bbb_smiles",
-        help="Examples: CCO (ethanol, BBB+), CC(=O)Nc1ccc(O)cc1 (paracetamol)",
+        help="Examples: CCO (ethanol), CC(=O)Nc1ccc(O)cc1 (paracetamol)",
     )
     top_k = st.slider(
         "SHAP features to display", min_value=3, max_value=10, value=5, key="bbb_topk",
@@ -327,6 +378,14 @@ def _render_bbb_tab() -> None:
                         "Model artifact not loaded yet. Run "
                         "`python -m src.models.bbb_model` to train it, "
                         "then retry."
+                    )
+                elif e.response.status_code == 400:
+                    # Robustness story: show the WARNING instead of an ERROR
+                    # — invalid input is a recoverable path, not a crash.
+                    st.warning(
+                        f"Robustness check passed: API rejected the input "
+                        f"with HTTP 400 (no crash). Detail: "
+                        f"{e.response.json().get('detail', e.response.text)}"
                     )
                 else:
                     st.error(
