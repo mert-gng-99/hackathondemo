@@ -204,6 +204,13 @@ def _post(endpoint: str, payload: dict) -> dict:
     return resp.json()
 
 
+def _get(path: str) -> dict:
+    """GET helper symmetric with _post."""
+    resp = httpx.get(f"{_API_URL}{path}", timeout=10.0)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _render_brand_header() -> None:
     st.markdown(
         """
@@ -806,6 +813,89 @@ def _render_ai_assistant_tab() -> None:
                 st.divider()
 
 
+def _render_experiments_tab() -> None:
+    """Day-8 T2B: MLflow runs table + two-run diff (Track 5)."""
+    _render_section(
+        "Experiments — MLOps Audit",
+        "MLflow runs across BBB / EEG / MRI experiments",
+        "Lists every recorded training run; pick any two to see "
+        "a side-by-side metric + parameter diff. Foundation for "
+        "auditable, reproducible model lineage."
+    )
+
+    if st.button("Refresh runs", key="exp_refresh"):
+        st.session_state.pop("experiments_runs_cache", None)
+
+    runs = st.session_state.get("experiments_runs_cache")
+    if runs is None:
+        try:
+            data = _get("/experiments/runs")
+            runs = data.get("runs", [])
+            st.session_state["experiments_runs_cache"] = runs
+        except httpx.HTTPStatusError as e:
+            st.error(f"Failed to load runs (HTTP {e.response.status_code}): {e.response.text}")
+            return
+        except httpx.RequestError as e:
+            st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+            return
+
+    if not runs:
+        st.info(
+            "No MLflow runs found. Trigger a pipeline (BBB / EEG / MRI) "
+            "first, then refresh this tab. (If MLflow is disabled via "
+            "NEUROBRIDGE_DISABLE_MLFLOW=1, this list will stay empty.)"
+        )
+        return
+
+    # Render the runs table with a flat preview of metrics + params
+    rows_preview = []
+    for run in runs:
+        rows_preview.append({
+            "run_id": run["run_id"][:8],
+            "experiment": run["experiment_name"],
+            "start_time": run["start_time"][:19],  # YYYY-MM-DDTHH:MM:SS
+            "status": run["status"],
+            "n_metrics": len(run["metrics"]),
+            "n_params": len(run["params"]),
+        })
+    st.dataframe(rows_preview, use_container_width=True, hide_index=True)
+
+    # Run-vs-run diff selector
+    st.markdown("### Compare two runs")
+    run_ids = [r["run_id"] for r in runs]
+    if len(run_ids) < 2:
+        st.caption("Need at least 2 runs to compare. Trigger another pipeline.")
+        return
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        sel_a = st.selectbox("Run A", options=run_ids, format_func=lambda x: x[:8], key="diff_a")
+    with col_b:
+        sel_b = st.selectbox("Run B", options=run_ids, index=min(1, len(run_ids) - 1), format_func=lambda x: x[:8], key="diff_b")
+
+    if st.button("Show diff", type="primary", key="exp_diff_go"):
+        try:
+            diff = _post("/experiments/diff", {"run_id_a": sel_a, "run_id_b": sel_b})
+        except httpx.HTTPStatusError as e:
+            st.error(f"Diff failed (HTTP {e.response.status_code}): {e.response.text}")
+            return
+        rows = diff.get("rows", [])
+        if not rows:
+            st.info("Both runs have identical metrics and params (or are empty).")
+            return
+        diff_table = [
+            {
+                "key": r["key"],
+                "kind": r["kind"],
+                "A": r["value_a"] or "—",
+                "B": r["value_b"] or "—",
+                "differs": "✓" if r["differs"] else "",
+            }
+            for r in rows
+        ]
+        st.dataframe(diff_table, use_container_width=True, hide_index=True)
+
+
 def main() -> None:
     """Streamlit entrypoint. Idempotent — Streamlit re-runs on every interaction."""
     st.set_page_config(
@@ -827,11 +917,12 @@ def main() -> None:
             "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
         )
 
-    bbb_tab, eeg_tab, mri_tab, assistant_tab = st.tabs([
+    bbb_tab, eeg_tab, mri_tab, assistant_tab, experiments_tab = st.tabs([
         "Molecule (BBB)",
         "Signal (EEG)",
         "Image (MRI)",
         "AI Assistant",
+        "Experiments",
     ])
 
     with bbb_tab:
@@ -842,6 +933,8 @@ def main() -> None:
         _render_mri_tab()
     with assistant_tab:
         _render_ai_assistant_tab()
+    with experiments_tab:
+        _render_experiments_tab()
 
 
 if __name__ == "__main__":
