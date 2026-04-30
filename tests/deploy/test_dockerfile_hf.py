@@ -62,14 +62,29 @@ class TestDockerfileHF:
         )
 
     def test_dockerfile_does_not_disable_mlflow(self, dockerfile_text):
-        """The kill-switch was removed in 2026-04-30 — file-store mlruns/
-        is built into the image and is safe to expose on the read-only
-        demo. Re-introducing the kill-switch would silently kill the
-        Experiments tab and the BBB provenance strip."""
-        text = dockerfile_text.lower()
-        assert "neurobridge_disable_mlflow=1" not in text, (
-            "Dockerfile must NOT disable MLflow — that empties the "
-            "Experiments tab and blanks the BBB provenance strip. "
-            "If you need to disable MLflow at runtime, set the env "
-            "manually on the Space, do not bake it into the image."
+        """The MLflow kill-switch must be absent from the Dockerfile —
+        file-store mlruns/ is built into the image and is safe to expose
+        on the read-only demo. Re-introducing the kill-switch would
+        silently kill the Experiments tab and the BBB provenance strip.
+
+        Scan ENV lines only, not comment lines, so a future docstring or
+        comment that cites the env name does not false-positive.
+        """
+        import re
+
+        env_lines = [
+            line
+            for line in dockerfile_text.splitlines()
+            if re.match(
+                r"\s*(ENV\s+)?NEUROBRIDGE_DISABLE_MLFLOW\s*=\s*1",
+                line,
+                re.IGNORECASE,
+            )
+        ]
+        assert not env_lines, (
+            "Dockerfile must NOT set NEUROBRIDGE_DISABLE_MLFLOW=1 — that "
+            "empties the Experiments tab and blanks the BBB provenance "
+            "strip. If you need to disable MLflow at runtime, set the env "
+            "manually on the Space, do not bake it into the image. "
+            f"Offending lines: {env_lines}"
         )
