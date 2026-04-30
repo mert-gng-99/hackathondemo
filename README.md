@@ -15,6 +15,7 @@ and Docker shipping.
 | 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped — 106 tests green |
 | 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped — 142 tests green |
 | 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped — 158 tests green |
+| 6 | Final Polish & Demo Features (Edge cases + Calibration + ComBat viz) | Calibration metadata + edge-case probes + `POST /pipeline/mri/diagnostics` | Shipped — 165 tests green |
 
 ## Quick Start
 
@@ -171,6 +172,7 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet (48 features, 106 tests green).
 - **Day 4 (shipped):** FastAPI surface in `src/api/` (POST `/pipeline/{bbb,eeg,mri}` + `/health`), MLflow experiment tracking via `src.core.tracking` (see AGENTS.md §7), Streamlit dashboard at `src/frontend/app.py`, and Docker / `docker-compose.yml` for the api + MLflow stack — 142 tests green.
 - **Day 5 (shipped):** Decision layer in `src/models/bbb_model.py` — RandomForest BBB classifier on Morgan fingerprints, SHAP top-k explanations, `POST /predict/bbb` endpoint, interactive Streamlit BBB tab with SMILES input + decision card + SHAP bar chart, and trainer CLI (`python -m src.models.bbb_model`). See AGENTS.md §8 — 158 tests green.
+- **Day 6 (shipped):** Final polish & demo features — calibration metadata bins on the BBB classifier (precision-at-confidence in `BBBPredictResponse.calibration`), edge-case dropdown in the Streamlit BBB tab (5 curated robustness probes), trust caption on the decision card, and `POST /pipeline/mri/diagnostics` returning Pre/Post ComBat long-format data + site-gap KPIs visualized as a faceted altair KDE in the MRI tab. See AGENTS.md §8 (calibration) + §9 (demo features) — 165 tests green.
 
 ## Where to Look
 
@@ -190,3 +192,5 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Day-4 tests:** [`tests/api/`](tests/api/), [`tests/frontend/`](tests/frontend/), [`tests/pipelines/test_cross_pipeline_smoke.py`](tests/pipelines/test_cross_pipeline_smoke.py)
 - **Day-5 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md`](docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md)
 - **BBB downstream model (classifier + SHAP explainer + trainer CLI):** [`src/models/bbb_model.py`](src/models/bbb_model.py) + [`tests/models/test_bbb_model.py`](tests/models/test_bbb_model.py) (12 tests)
+- **Day-6 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md`](docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md)
+- **MRI ComBat diagnostics surface (pre/post site-gap KPIs):** `POST /pipeline/mri/diagnostics` — see [`src/api/routes.py`](src/api/routes.py) + [`src/pipelines/mri_pipeline.py`](src/pipelines/mri_pipeline.py)

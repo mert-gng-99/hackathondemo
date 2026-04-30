@@ -172,3 +172,31 @@ Parquet produces identical predictions.
 
 **Override `BBB_MODEL_PATH`** env var to point the API at a non-default
 artifact location (used by tests for tmp_path isolation).
+
+**Calibration metadata** (Day 6): `train()` does an 80/20 stratified split,
+computes precision-at-confidence-threshold bins on the held-out test set,
+and stashes them on `model._neurobridge_calibration: list[dict]` (sorted
+ascending by threshold). The API includes the bin matching each
+prediction's confidence in `BBBPredictResponse.calibration`. UI uses this
+to render an honest trust caption ("≥75% confident → 92% precision, n=18").
+For tiny test fixtures where stratified split fails, calibration falls
+back to zero-support bins so the API contract is always populated.
+
+## 9. Demo Features (Day 6)
+
+The frontend includes three jury-day demo amplifiers that don't change
+the core contract:
+
+- **Edge-case dropdown** (BBB tab): a curated catalog of 5 robustness
+  probes — invalid SMILES, empty input, OOD macrocycle (cyclosporine-like),
+  heavy halogenated aromatic. Each has a stated expectation; the UI
+  visualizes graceful failure (HTTP 400 → recoverable warning, never
+  a crash).
+- **Calibration trust caption** (BBB decision card): renders the
+  precision-at-confidence-threshold from `BBBPredictResponse.calibration`.
+  Demonstrates that the system knows what it doesn't know.
+- **MRI ComBat diagnostics** (MRI tab): `POST /pipeline/mri/diagnostics`
+  runs the pipeline twice (pre + post ComBat) and returns long-format
+  data + site-gap KPIs (Pre, Post, Reduction factor). The UI renders
+  a faceted altair density plot — visual proof that ComBat removes
+  site-driven domain shift.
