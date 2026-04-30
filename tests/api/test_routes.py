@@ -137,3 +137,35 @@ class TestBBBPredictRoute:
             json={"smiles": "CCO", "top_k": 5},
         )
         assert resp.status_code == 503
+
+
+class TestMRIDiagnosticsRoute:
+    def test_returns_200_with_pre_and_post_data(self, tmp_path: Path):
+        from tests.fixtures.build_mri_fixture import build as build_mri
+        fixture_dir = build_mri(out_dir=tmp_path / "mri")
+        resp = client.post(
+            "/pipeline/mri/diagnostics",
+            json={
+                "input_dir": str(fixture_dir),
+                "sites_csv": str(fixture_dir / "sites.csv"),
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["rows"]) > 0
+        assert body["site_gap_pre"] >= 0.0
+        assert body["site_gap_post"] >= 0.0
+        # Reduction factor is the headline KPI
+        assert body["reduction_factor"] >= 1.0  # ComBat must reduce, not amplify
+        states = {r["harmonization_state"] for r in body["rows"]}
+        assert states == {"Pre-ComBat", "Post-ComBat"}
+
+    def test_returns_404_when_input_dir_missing(self, tmp_path: Path):
+        resp = client.post(
+            "/pipeline/mri/diagnostics",
+            json={
+                "input_dir": str(tmp_path / "does_not_exist"),
+                "sites_csv": str(tmp_path / "sites.csv"),
+            },
+        )
+        assert resp.status_code == 404

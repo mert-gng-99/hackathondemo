@@ -80,3 +80,25 @@ class BBBPredictResponse(BaseModel):
         None,
         description="Statistical context: how often the model is right when this confident on held-out data.",
     )
+
+
+class MRIDiagnosticsRequest(BaseModel):
+    """Request body for /pipeline/mri/diagnostics — same as MRIRequest minus output_path."""
+    input_dir: str = Field(..., description="Directory of .nii.gz files")
+    sites_csv: str = Field(..., description="CSV mapping subject_id → site")
+
+
+class HarmonizationRow(BaseModel):
+    subject_id: str
+    site: str
+    feature: str
+    feature_value: float
+    harmonization_state: str
+
+
+class MRIDiagnosticsResponse(BaseModel):
+    """Long-format pre/post ComBat data for visualization."""
+    rows: list[HarmonizationRow]
+    site_gap_pre: float = Field(..., description="Range of per-site means before ComBat")
+    site_gap_post: float = Field(..., description="Range of per-site means after ComBat")
+    reduction_factor: float = Field(..., description="site_gap_pre / max(site_gap_post, eps)")

@@ -23,6 +23,9 @@ from src.api.schemas import (
     CalibrationContext,
     EEGRequest,
     FeatureAttribution,
+    HarmonizationRow,
+    MRIDiagnosticsRequest,
+    MRIDiagnosticsResponse,
     MRIRequest,
     PipelineResponse,
 )
@@ -183,4 +186,48 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         confidence=pred["confidence"],
         top_features=[FeatureAttribution(**a) for a in attributions],
         calibration=calibration,
+    )
+
+
+@router.post("/mri/diagnostics", response_model=MRIDiagnosticsResponse)
+def mri_diagnostics(req: MRIDiagnosticsRequest) -> MRIDiagnosticsResponse:
+    """Run the MRI pipeline twice and return pre/post ComBat data + site-gap KPIs."""
+    input_dir = Path(req.input_dir)
+    sites_csv = Path(req.sites_csv)
+    try:
+        df = mri_pipeline.compute_harmonization_diagnostics(
+            input_dir=input_dir, sites_csv=sites_csv,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if df.empty:
+        return MRIDiagnosticsResponse(
+            rows=[], site_gap_pre=0.0, site_gap_post=0.0, reduction_factor=0.0,
+        )
+
+    # Site-gap KPI on the first feature, averaged per site
+    feat = df["feature"].iloc[0]
+    feat_df = df[df["feature"] == feat]
+    pre_means = feat_df[feat_df["harmonization_state"] == "Pre-ComBat"].groupby(
+        "site"
+    )["feature_value"].mean()
+    post_means = feat_df[feat_df["harmonization_state"] == "Post-ComBat"].groupby(
+        "site"
+    )["feature_value"].mean()
+    site_gap_pre = float(pre_means.max() - pre_means.min())
+    site_gap_post = float(post_means.max() - post_means.min())
+    eps = 1e-9
+    reduction_factor = site_gap_pre / max(site_gap_post, eps)
+
+    rows = [
+        HarmonizationRow(**rec) for rec in df.to_dict(orient="records")
+    ]
+    return MRIDiagnosticsResponse(
+        rows=rows,
+        site_gap_pre=site_gap_pre,
+        site_gap_post=site_gap_post,
+        reduction_factor=reduction_factor,
     )
