@@ -161,3 +161,35 @@ class BBBExplainResponse(BaseModel):
         None,
         description="LLM model name when source='llm'; None when source='template'",
     )
+
+
+class EEGExplainRequest(BaseModel):
+    """Day-8 T1B: payload for POST /explain/eeg."""
+    rows: int = Field(..., ge=0, description="Number of epochs produced")
+    columns: int = Field(..., ge=0, description="Number of features per epoch")
+    duration_sec: float = Field(..., ge=0.0, description="Pipeline wall-clock seconds")
+    mlflow_run_id: str | None = Field(None, description="MLflow run id, if available")
+    user_question: str | None = Field(None, description="Optional user question for the LLM prompt")
+
+
+class EEGExplainResponse(BaseModel):
+    """Day-8 T1B: response from POST /explain/eeg."""
+    rationale: str
+    source: str
+    model: str | None = None
+
+
+class MRIExplainRequest(BaseModel):
+    """Day-8 T1B: payload for POST /explain/mri."""
+    site_gap_pre: float = Field(..., ge=0.0)
+    site_gap_post: float = Field(..., ge=0.0)
+    reduction_factor: float = Field(..., ge=0.0)
+    n_subjects: int = Field(..., ge=0)
+    user_question: str | None = None
+
+
+class MRIExplainResponse(BaseModel):
+    """Day-8 T1B: response from POST /explain/mri."""
+    rationale: str
+    source: str
+    model: str | None = None

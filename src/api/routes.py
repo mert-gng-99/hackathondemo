@@ -24,12 +24,16 @@ from src.api.schemas import (
     BBBPredictResponse,
     BBBRequest,
     CalibrationContext,
+    EEGExplainRequest,
+    EEGExplainResponse,
     EEGRequest,
     FeatureAttribution,
     HarmonizationRow,
     ModelProvenance,
     MRIDiagnosticsRequest,
     MRIDiagnosticsResponse,
+    MRIExplainRequest,
+    MRIExplainResponse,
     MRIRequest,
     PipelineResponse,
 )
@@ -358,6 +362,42 @@ def explain_bbb(req: BBBExplainRequest) -> BBBExplainResponse:
     }
     result = llm_explainer.explain(payload)
     return BBBExplainResponse(
+        rationale=result["rationale"],
+        source=result["source"],
+        model=result["model"],
+    )
+
+
+@explain_router.post("/eeg", response_model=EEGExplainResponse)
+def explain_eeg(req: EEGExplainRequest) -> EEGExplainResponse:
+    """Natural-language rationale for an EEG pipeline run."""
+    payload = {
+        "rows": req.rows,
+        "columns": req.columns,
+        "duration_sec": req.duration_sec,
+        "mlflow_run_id": req.mlflow_run_id,
+        "user_question": req.user_question or "",
+    }
+    result = llm_explainer.explain(payload, modality="eeg")
+    return EEGExplainResponse(
+        rationale=result["rationale"],
+        source=result["source"],
+        model=result["model"],
+    )
+
+
+@explain_router.post("/mri", response_model=MRIExplainResponse)
+def explain_mri(req: MRIExplainRequest) -> MRIExplainResponse:
+    """Natural-language rationale for an MRI ComBat diagnostic run."""
+    payload = {
+        "site_gap_pre": req.site_gap_pre,
+        "site_gap_post": req.site_gap_post,
+        "reduction_factor": req.reduction_factor,
+        "n_subjects": req.n_subjects,
+        "user_question": req.user_question or "",
+    }
+    result = llm_explainer.explain(payload, modality="mri")
+    return MRIExplainResponse(
         rationale=result["rationale"],
         source=result["source"],
         model=result["model"],

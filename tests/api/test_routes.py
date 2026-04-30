@@ -259,3 +259,44 @@ class TestExplainBBBRoute:
         for feat in ("fp_341", "fp_902", "fp_77"):
             assert feat in out["rationale"]
         assert "permeable" in out["rationale"]
+
+
+class TestExplainEEGRoute:
+    """Day-8 T1B: POST /explain/eeg."""
+
+    def test_returns_200_with_template_source(self, monkeypatch):
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        body = {
+            "rows": 30,
+            "columns": 95,
+            "duration_sec": 4.32,
+            "mlflow_run_id": "abc12345",
+            "user_question": "Why were epochs dropped?",
+        }
+        resp = client.post("/explain/eeg", json=body)
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["source"] == "template"
+        assert out["model"] is None
+        assert "30" in out["rationale"]
+        assert "95" in out["rationale"]
+
+
+class TestExplainMRIRoute:
+    """Day-8 T1B: POST /explain/mri."""
+
+    def test_returns_200_with_template_source(self, monkeypatch):
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        body = {
+            "site_gap_pre": 5.0004,
+            "site_gap_post": 0.0015,
+            "reduction_factor": 3290.0,
+            "n_subjects": 6,
+            "user_question": "Why does ComBat matter?",
+        }
+        resp = client.post("/explain/mri", json=body)
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["source"] == "template"
+        assert "3290" in out["rationale"]
+        assert "6" in out["rationale"]
