@@ -1,12 +1,14 @@
-"""NeuroBridge Enterprise — Streamlit B2B dashboard.
+"""NeuroBridge Enterprise — Streamlit B2B dashboard (Editorial redesign).
 
-Three tabs (Molecule / Signal / Image), each fires a POST request against the
-sibling FastAPI service and renders a result card with row counts, runtime,
-and a deep link to the corresponding MLflow run.
+Five tabs (Molecule / Signal / Image / AI Assistant / Experiments) sitting on
+top of one FastAPI surface. Every interaction returns an auditable decision
+artefact: label + confidence + calibration + drift + provenance + SHAP.
 
-Design: Trust & Authority — navy + sky CTA + cool-white background, Plus
-Jakarta Sans, generous whitespace. Avoids emoji icons, AI gradients, and
-playful flourishes (per design-system guidance for clinical-ML B2B).
+Visual language (post-redesign):
+- Dark theme = editorial Netflix-style — deep neutral grays + sand accent
+- Light theme = warm paper + charcoal type — Apple HIG / NYT-Cooking energy
+- Single sand brand-mark across both themes (#D2C4B1)
+- Inter (display + body) + JetBrains Mono (data / code)
 
 Launch: `streamlit run src/frontend/app.py`
 """
@@ -25,176 +27,726 @@ _MLFLOW_URL = os.environ.get(
     os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"),
 )
 _MLFLOW_DISABLED = os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") == "1"
+_LLM_DISABLED = os.environ.get("NEUROBRIDGE_DISABLE_LLM") == "1"
 
 
-# Trust & Authority custom CSS — overrides Streamlit defaults to lock the
-# design-system tokens. Loaded once at app start via st.markdown.
-_CUSTOM_CSS = """
+# --------------------------------------------------------------------------- #
+# Design tokens — single source of truth for both themes.                     #
+# Tokens are exposed as CSS custom properties at the :root level; every       #
+# component reads from them so a theme swap is just a value swap.             #
+# --------------------------------------------------------------------------- #
+
+_TOKENS_DARK = {
+    # Surfaces (deepest → most elevated)
+    "bg-base":       "#0e0e10",
+    "bg-elevated":   "#161618",
+    "bg-elevated-2": "#1e1e21",
+    "bg-elevated-3": "#2a2a2e",
+    # Brand accent
+    "accent":        "#D2C4B1",
+    "accent-strong": "#E8DCC6",
+    "accent-soft":   "rgba(210, 196, 177, 0.12)",
+    "accent-ring":   "rgba(210, 196, 177, 0.35)",
+    # Text
+    "text-primary":   "#F5F2ED",
+    "text-secondary": "#A8A29A",
+    "text-tertiary":  "#6B6660",
+    "text-on-accent": "#161618",
+    # Lines
+    "border":        "#2a2a2e",
+    "border-strong": "#3a3a3e",
+    # Semantic (keep cool — never red/green dominant in editorial)
+    "success":       "#7FB069",
+    "warning":       "#E0B469",
+    "danger":        "#D97A6C",
+    # Effects
+    "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.4)",
+    "shadow-md": "0 8px 24px rgba(0, 0, 0, 0.45)",
+    "shadow-lg": "0 16px 48px rgba(0, 0, 0, 0.55)",
+}
+
+_TOKENS_LIGHT = {
+    "bg-base":       "#FAF7F2",
+    "bg-elevated":   "#FFFFFF",
+    "bg-elevated-2": "#F5F0E8",
+    "bg-elevated-3": "#EDE5D5",
+    "accent":        "#1e1e21",
+    "accent-strong": "#0e0e10",
+    "accent-soft":   "rgba(30, 30, 33, 0.06)",
+    "accent-ring":   "rgba(30, 30, 33, 0.18)",
+    "text-primary":   "#161618",
+    "text-secondary": "#4A4540",
+    "text-tertiary":  "#8A857E",
+    "text-on-accent": "#FAF7F2",
+    "border":        "#E5DDC9",
+    "border-strong": "#D2C4B1",
+    "success":       "#3F7D45",
+    "warning":       "#A06D1F",
+    "danger":        "#A1483D",
+    "shadow-sm": "0 1px 2px rgba(40, 30, 20, 0.04)",
+    "shadow-md": "0 4px 16px rgba(40, 30, 20, 0.08)",
+    "shadow-lg": "0 12px 40px rgba(40, 30, 20, 0.12)",
+}
+
+
+def _build_css(theme: str) -> str:
+    """Return the full <style> block for the active theme.
+
+    All tokens are emitted as CSS variables so the rest of the stylesheet
+    is theme-agnostic. Re-runs cheaply since Streamlit caches markdown.
+    """
+    tokens = _TOKENS_DARK if theme == "dark" else _TOKENS_LIGHT
+    css_vars = "\n".join(f"        --ng-{k}: {v};" for k, v in tokens.items())
+
+    return f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
-html, body, [class*="css"], .stApp, .stMarkdown, .stTabs, .stButton, .stTextInput {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-}
+:root {{
+{css_vars}
+    --ng-radius-sm: 8px;
+    --ng-radius-md: 12px;
+    --ng-radius-lg: 16px;
+    --ng-radius-xl: 24px;
+    --ng-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --ng-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+}}
 
-.stApp {
-    background-color: #F8FAFC;
-}
+/* --- Global typography + canvas ----------------------------------------- */
 
-/* Brand header band */
-.brand-header {
-    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
-    color: #F8FAFC;
-    padding: 1.75rem 2rem;
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    border: 1px solid #1E293B;
-}
-.brand-header h1 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin: 0;
-    color: #FFFFFF;
-}
-.brand-header p {
-    color: #94A3B8;
-    margin: 0.25rem 0 0 0;
-    font-size: 0.95rem;
-    font-weight: 400;
-}
+html, body, [class*="css"], .stApp, .stMarkdown, .stTabs, .stButton,
+.stTextInput, .stSelectbox, .stSlider, .stDataFrame, .stMetric, .stExpander {{
+    font-family: var(--ng-font-sans) !important;
+    color: var(--ng-text-primary);
+}}
 
-/* Status pills */
-.status-pill {
-    display: inline-block;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    margin-right: 0.5rem;
-}
-.status-ok    { background: #DCFCE7; color: #166534; }
-.status-warn  { background: #FEF3C7; color: #92400E; }
-.status-down  { background: #FEE2E2; color: #991B1B; }
+.stApp {{
+    background: var(--ng-bg-base) !important;
+    color: var(--ng-text-primary);
+}}
 
-/* Cards / metric containers */
-[data-testid="stMetric"] {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    padding: 1.1rem 1.25rem;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}
-[data-testid="stMetricLabel"] {
-    color: #64748B;
-    font-size: 0.78rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-[data-testid="stMetricValue"] {
-    color: #0F172A;
-    font-weight: 700;
-    font-size: 1.85rem;
-}
+main .block-container {{
+    padding-top: 2rem;
+    padding-bottom: 4rem;
+    max-width: 1200px;
+}}
 
-/* Primary action button */
-.stButton > button[kind="primary"] {
-    background: #0369A1;
-    color: #FFFFFF;
-    border: 0;
-    border-radius: 8px;
-    font-weight: 600;
-    padding: 0.55rem 1.2rem;
-    transition: background 180ms ease, transform 120ms ease;
-}
-.stButton > button[kind="primary"]:hover {
-    background: #075985;
-    transform: translateY(-1px);
-}
-.stButton > button[kind="primary"]:focus {
-    outline: 3px solid rgba(3, 105, 161, 0.35);
-    outline-offset: 2px;
-}
+/* --- Hero / brand strip ------------------------------------------------- */
 
-/* Tab strip */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 0.25rem;
-    border-bottom: 1px solid #E2E8F0;
-}
-.stTabs [data-baseweb="tab"] {
-    color: #64748B;
-    font-weight: 600;
-    padding: 0.65rem 1.25rem;
-    border-bottom: 2px solid transparent;
-    transition: color 150ms ease, border-color 150ms ease;
-}
-.stTabs [aria-selected="true"] {
-    color: #0F172A !important;
-    border-bottom-color: #0369A1 !important;
-}
+.hero {{
+    position: relative;
+    padding: 3rem 2.25rem 2.5rem 2.25rem;
+    margin: -1rem 0 2rem 0;
+    border-radius: var(--ng-radius-lg);
+    background: linear-gradient(180deg,
+        var(--ng-bg-elevated) 0%,
+        var(--ng-bg-elevated-2) 100%);
+    border: 1px solid var(--ng-border);
+    box-shadow: var(--ng-shadow-md);
+    overflow: hidden;
+}}
 
-/* Section headers inside tabs */
-.section-eyebrow {
+.hero::after {{
+    content: "";
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg,
+        transparent 0%,
+        var(--ng-accent) 50%,
+        transparent 100%);
+}}
+
+.hero-eyebrow {{
+    font-family: var(--ng-font-mono);
     font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--ng-accent);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin: 0 0 0.85rem 0;
+}}
+
+.hero-title {{
+    font-size: 2.6rem;
     font-weight: 700;
-    color: #0369A1;
+    color: var(--ng-text-primary);
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin: 0 0 0.6rem 0;
+}}
+
+.hero-title .accent {{
+    color: var(--ng-accent);
+    font-weight: 800;
+}}
+
+.hero-tagline {{
+    color: var(--ng-text-secondary);
+    font-size: 1.05rem;
+    line-height: 1.55;
+    margin: 0 0 1.25rem 0;
+    max-width: 60ch;
+}}
+
+.hero-status-row {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+}}
+
+/* --- Status dots + pills ----------------------------------------------- */
+
+.dot {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.32rem 0.72rem;
+    border-radius: 999px;
+    font-family: var(--ng-font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin: 0;
-}
-.section-title {
-    font-size: 1.35rem;
-    font-weight: 700;
-    color: #0F172A;
-    margin: 0.15rem 0 0.5rem 0;
-    letter-spacing: -0.01em;
-}
-.section-desc {
-    color: #475569;
-    font-size: 0.95rem;
-    margin: 0 0 1.5rem 0;
-    line-height: 1.6;
-}
+    background: var(--ng-bg-elevated-3);
+    color: var(--ng-text-secondary);
+    border: 1px solid var(--ng-border);
+}}
 
-/* Result card link styling */
-.mlflow-link a {
-    color: #0369A1;
-    text-decoration: none;
+.dot::before {{
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ng-text-tertiary);
+}}
+
+.dot.is-ok::before    {{ background: var(--ng-success); box-shadow: 0 0 8px var(--ng-success); }}
+.dot.is-warn::before  {{ background: var(--ng-warning); }}
+.dot.is-down::before  {{ background: var(--ng-danger); }}
+.dot.is-mute::before  {{ background: var(--ng-text-tertiary); }}
+
+/* --- Section header ----------------------------------------------------- */
+
+.section {{
+    margin: 2rem 0 1.5rem 0;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--ng-border);
+}}
+.section-eyebrow {{
+    font-family: var(--ng-font-mono);
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--ng-accent);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin: 0 0 0.55rem 0;
+}}
+.section-title {{
+    font-size: 1.7rem;
+    font-weight: 700;
+    color: var(--ng-text-primary);
+    letter-spacing: -0.02em;
+    margin: 0 0 0.65rem 0;
+    line-height: 1.2;
+}}
+.section-desc {{
+    color: var(--ng-text-secondary);
+    font-size: 0.97rem;
+    line-height: 1.65;
+    margin: 0;
+    max-width: 70ch;
+}}
+
+/* --- Decision card (BBB) ----------------------------------------------- */
+
+.card {{
+    background: var(--ng-bg-elevated);
+    border: 1px solid var(--ng-border);
+    border-radius: var(--ng-radius-md);
+    padding: 1.6rem 1.75rem;
+    margin: 1.25rem 0;
+    box-shadow: var(--ng-shadow-md);
+}}
+
+.provenance-strip {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    font-family: var(--ng-font-mono);
+    font-size: 0.74rem;
+    color: var(--ng-text-tertiary);
+    letter-spacing: 0.04em;
+    margin-bottom: 1.25rem;
+    padding-bottom: 1.1rem;
+    border-bottom: 1px solid var(--ng-border);
+}}
+.provenance-strip strong {{
+    color: var(--ng-text-secondary);
+    font-weight: 500;
+}}
+
+.verdict {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}}
+.verdict-label {{
+    font-family: var(--ng-font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ng-text-tertiary);
+    margin: 0;
+}}
+.verdict-value {{
+    font-size: 3rem;
+    font-weight: 800;
+    color: var(--ng-accent);
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin: 0;
+    font-feature-settings: "tnum" on, "lnum" on;
+}}
+.verdict-confidence {{
+    font-size: 1.1rem;
+    color: var(--ng-text-secondary);
+    margin: 0.25rem 0 0 0;
+    font-weight: 400;
+}}
+.verdict-confidence strong {{
+    color: var(--ng-text-primary);
     font-weight: 600;
-    border-bottom: 1px solid rgba(3, 105, 161, 0.25);
-    transition: border-color 150ms ease;
-}
-.mlflow-link a:hover {
-    border-bottom-color: #0369A1;
-}
+    font-feature-settings: "tnum" on;
+}}
+
+.signals {{
+    display: grid;
+    gap: 0.65rem;
+    padding: 1rem 0 1.25rem 0;
+    border-top: 1px solid var(--ng-border);
+    border-bottom: 1px solid var(--ng-border);
+    margin-bottom: 1.25rem;
+}}
+.signal-row {{
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 0.85rem;
+    align-items: baseline;
+    font-size: 0.92rem;
+    line-height: 1.55;
+}}
+.signal-key {{
+    font-family: var(--ng-font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--ng-text-tertiary);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}}
+.signal-value {{
+    color: var(--ng-text-secondary);
+    font-feature-settings: "tnum" on;
+}}
+.signal-value strong {{
+    color: var(--ng-text-primary);
+    font-weight: 600;
+}}
+
+/* --- Streamlit native overrides --------------------------------------- */
+
+/* Buttons — primary CTA = sand block in dark, charcoal in light */
+.stButton > button[kind="primary"],
+.stButton > button[kind="primaryFormSubmit"] {{
+    background: var(--ng-accent) !important;
+    color: var(--ng-text-on-accent) !important;
+    border: 0 !important;
+    border-radius: var(--ng-radius-sm) !important;
+    font-weight: 600 !important;
+    padding: 0.6rem 1.4rem !important;
+    letter-spacing: 0.01em !important;
+    font-size: 0.92rem !important;
+    transition: background 180ms ease, transform 120ms ease, box-shadow 180ms ease !important;
+    box-shadow: 0 0 0 0 var(--ng-accent-ring);
+}}
+.stButton > button[kind="primary"]:hover {{
+    background: var(--ng-accent-strong) !important;
+    transform: translateY(-1px);
+}}
+.stButton > button[kind="primary"]:focus {{
+    box-shadow: 0 0 0 3px var(--ng-accent-ring) !important;
+    outline: none !important;
+}}
+
+/* Buttons — secondary = transparent border */
+.stButton > button:not([kind="primary"]):not([kind="primaryFormSubmit"]) {{
+    background: transparent !important;
+    color: var(--ng-text-primary) !important;
+    border: 1px solid var(--ng-border-strong) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    font-weight: 500 !important;
+    padding: 0.55rem 1.2rem !important;
+    transition: border-color 180ms ease, background 180ms ease !important;
+}}
+.stButton > button:not([kind="primary"]):not([kind="primaryFormSubmit"]):hover {{
+    background: var(--ng-bg-elevated-3) !important;
+    border-color: var(--ng-accent) !important;
+}}
+
+/* Tabs — left-aligned underline indicator (Apple/Netflix tab strip) */
+.stTabs [data-baseweb="tab-list"] {{
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--ng-border);
+    background: transparent !important;
+}}
+.stTabs [data-baseweb="tab"] {{
+    color: var(--ng-text-tertiary) !important;
+    font-weight: 500 !important;
+    font-size: 0.95rem !important;
+    padding: 0.85rem 1.4rem !important;
+    border-bottom: 2px solid transparent !important;
+    background: transparent !important;
+    transition: color 180ms ease, border-color 180ms ease !important;
+    letter-spacing: -0.005em;
+}}
+.stTabs [data-baseweb="tab"]:hover {{
+    color: var(--ng-text-secondary) !important;
+}}
+.stTabs [aria-selected="true"] {{
+    color: var(--ng-accent) !important;
+    border-bottom-color: var(--ng-accent) !important;
+    font-weight: 600 !important;
+}}
+
+/* Inputs — flat with accent-on-focus border */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {{
+    background: var(--ng-bg-elevated-2) !important;
+    color: var(--ng-text-primary) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    padding: 0.7rem 0.85rem !important;
+    font-family: var(--ng-font-sans) !important;
+    font-size: 0.95rem !important;
+    transition: border-color 150ms ease, box-shadow 150ms ease !important;
+}}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {{
+    border-color: var(--ng-accent) !important;
+    box-shadow: 0 0 0 3px var(--ng-accent-ring) !important;
+    outline: none !important;
+}}
+
+/* Selectbox */
+[data-baseweb="select"] > div {{
+    background: var(--ng-bg-elevated-2) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    color: var(--ng-text-primary) !important;
+}}
+
+/* Sliders */
+.stSlider [role="slider"] {{
+    background: var(--ng-accent) !important;
+    border: 2px solid var(--ng-bg-base) !important;
+}}
+.stSlider > div > div > div > div {{
+    background: var(--ng-accent) !important;
+}}
+
+/* Progress bar */
+.stProgress > div > div > div > div {{
+    background: var(--ng-accent) !important;
+    border-radius: 999px !important;
+}}
+.stProgress > div > div > div {{
+    background: var(--ng-bg-elevated-3) !important;
+    border-radius: 999px !important;
+}}
+
+/* Metric cards (KPI strip) */
+[data-testid="stMetric"] {{
+    background: var(--ng-bg-elevated) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-md) !important;
+    padding: 1.4rem 1.5rem !important;
+    box-shadow: var(--ng-shadow-sm);
+}}
+[data-testid="stMetricLabel"] > div {{
+    color: var(--ng-text-tertiary) !important;
+    font-family: var(--ng-font-mono) !important;
+    font-size: 0.7rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.14em !important;
+}}
+[data-testid="stMetricValue"] > div {{
+    color: var(--ng-text-primary) !important;
+    font-weight: 700 !important;
+    font-size: 2.4rem !important;
+    letter-spacing: -0.02em !important;
+    font-feature-settings: "tnum" on, "lnum" on !important;
+    line-height: 1.1 !important;
+}}
+[data-testid="stMetricDelta"] {{
+    color: var(--ng-text-secondary) !important;
+}}
+
+/* Captions */
+.stCaption, [data-testid="stCaptionContainer"] {{
+    color: var(--ng-text-tertiary) !important;
+    font-size: 0.85rem !important;
+    line-height: 1.55 !important;
+}}
+
+/* Expander */
+.streamlit-expanderHeader, [data-testid="stExpander"] details summary {{
+    background: var(--ng-bg-elevated-2) !important;
+    color: var(--ng-text-primary) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    font-weight: 500 !important;
+}}
+[data-testid="stExpander"] {{
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    background: var(--ng-bg-elevated) !important;
+}}
+
+/* Code / inline code */
+code, pre {{
+    background: var(--ng-bg-elevated-3) !important;
+    color: var(--ng-accent-strong) !important;
+    padding: 0.12rem 0.42rem !important;
+    border-radius: 4px !important;
+    font-family: var(--ng-font-mono) !important;
+    font-size: 0.86rem !important;
+}}
+
+/* Alerts (info / warning / error / success) — flat editorial banners */
+[data-testid="stAlert"] {{
+    background: var(--ng-bg-elevated) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-left: 3px solid var(--ng-accent) !important;
+    border-radius: var(--ng-radius-sm) !important;
+    color: var(--ng-text-primary) !important;
+    box-shadow: var(--ng-shadow-sm);
+}}
+[data-testid="stAlert"][data-baseweb="notification"][kind="info"] {{ border-left-color: var(--ng-accent); }}
+[data-testid="stAlert"][data-baseweb="notification"][kind="warning"] {{ border-left-color: var(--ng-warning); }}
+[data-testid="stAlert"][data-baseweb="notification"][kind="error"] {{ border-left-color: var(--ng-danger); }}
+[data-testid="stAlert"][data-baseweb="notification"][kind="success"] {{ border-left-color: var(--ng-success); }}
 
 /* Sidebar */
-section[data-testid="stSidebar"] {
-    background: #FFFFFF;
-    border-right: 1px solid #E2E8F0;
-}
-section[data-testid="stSidebar"] h3 {
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: #64748B;
+section[data-testid="stSidebar"] {{
+    background: var(--ng-bg-elevated) !important;
+    border-right: 1px solid var(--ng-border) !important;
+}}
+section[data-testid="stSidebar"] .block-container {{
+    padding-top: 1.5rem;
+}}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {{
+    color: var(--ng-text-primary) !important;
+}}
+section[data-testid="stSidebar"] h3 {{
+    font-family: var(--ng-font-mono) !important;
+    font-size: 0.7rem !important;
+    font-weight: 500 !important;
+    color: var(--ng-text-tertiary) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.18em !important;
+    margin-top: 1.5rem !important;
+    margin-bottom: 0.6rem !important;
+}}
+
+/* Sidebar brand mark */
+.sidebar-brand {{
+    font-family: var(--ng-font-sans);
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--ng-text-primary);
+    letter-spacing: -0.02em;
+    margin: 0 0 0.15rem 0;
+}}
+.sidebar-brand .accent {{
+    color: var(--ng-accent);
+}}
+.sidebar-tagline {{
+    font-family: var(--ng-font-mono);
+    font-size: 0.7rem;
+    color: var(--ng-text-tertiary);
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-}
+    margin: 0 0 1.5rem 0;
+}}
+
+/* Toggle (theme switch) */
+[data-baseweb="checkbox"] [aria-checked="true"] {{
+    background: var(--ng-accent) !important;
+    border-color: var(--ng-accent) !important;
+}}
+
+/* Dataframe */
+[data-testid="stDataFrame"] {{
+    background: var(--ng-bg-elevated) !important;
+    border: 1px solid var(--ng-border) !important;
+    border-radius: var(--ng-radius-md) !important;
+    overflow: hidden;
+}}
+
+/* Markdown headings inside tabs */
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {{
+    color: var(--ng-text-primary) !important;
+    letter-spacing: -0.015em !important;
+}}
+.stMarkdown h3 {{
+    font-size: 1.2rem !important;
+    font-weight: 600 !important;
+    margin-top: 1.5rem !important;
+}}
+
+/* Divider */
+hr, [data-testid="stDivider"] {{
+    border-color: var(--ng-border) !important;
+    margin: 1.5rem 0 !important;
+}}
+
+/* Toast (st.toast) */
+.stToast {{
+    background: var(--ng-bg-elevated) !important;
+    color: var(--ng-text-primary) !important;
+    border: 1px solid var(--ng-border) !important;
+    box-shadow: var(--ng-shadow-lg) !important;
+}}
+
+/* Chart container — quiet frame */
+[data-testid="stArrowVegaLiteChart"], [data-testid="stVegaLiteChart"] {{
+    background: var(--ng-bg-elevated);
+    border: 1px solid var(--ng-border);
+    border-radius: var(--ng-radius-md);
+    padding: 1rem;
+}}
+
+/* Bar chart (st.bar_chart) inherits the same frame */
+[data-testid="stBarChart"] {{
+    background: var(--ng-bg-elevated);
+    border: 1px solid var(--ng-border);
+    border-radius: var(--ng-radius-md);
+    padding: 1rem;
+}}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {{
+    * {{
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }}
+}}
+
+/* Scrollbar — subtle */
+::-webkit-scrollbar {{ width: 10px; height: 10px; }}
+::-webkit-scrollbar-track {{ background: var(--ng-bg-base); }}
+::-webkit-scrollbar-thumb {{
+    background: var(--ng-bg-elevated-3);
+    border-radius: 999px;
+    border: 2px solid var(--ng-bg-base);
+}}
+::-webkit-scrollbar-thumb:hover {{ background: var(--ng-border-strong); }}
 </style>
 """
 
+
+# --------------------------------------------------------------------------- #
+# Theme management                                                            #
+# --------------------------------------------------------------------------- #
+
+def _init_theme() -> str:
+    """Initialize and return the active theme ('dark' default)."""
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "dark"
+    return st.session_state["theme"]
+
+
+def _altair_theme(theme: str) -> dict:
+    """Return an altair theme matching the active palette.
+
+    Registered as 'neurobridge' on first call; subsequent calls just enable.
+    """
+    tokens = _TOKENS_DARK if theme == "dark" else _TOKENS_LIGHT
+    return {
+        "config": {
+            "background": tokens["bg-elevated"],
+            "view": {"stroke": "transparent"},
+            "axis": {
+                "labelColor": tokens["text-secondary"],
+                "titleColor": tokens["text-secondary"],
+                "labelFont": "Inter",
+                "titleFont": "Inter",
+                "labelFontSize": 11,
+                "titleFontSize": 12,
+                "gridColor": tokens["border"],
+                "domainColor": tokens["border"],
+                "tickColor": tokens["border"],
+            },
+            "header": {
+                "labelColor": tokens["text-primary"],
+                "labelFont": "Inter",
+                "labelFontSize": 13,
+                "labelFontWeight": 600,
+                "titleColor": tokens["text-secondary"],
+            },
+            "legend": {
+                "labelColor": tokens["text-secondary"],
+                "titleColor": tokens["text-secondary"],
+                "labelFont": "Inter",
+                "titleFont": "Inter",
+            },
+            "title": {
+                "color": tokens["text-primary"],
+                "font": "Inter",
+                "fontWeight": 600,
+            },
+            "range": {
+                # Editorial palette: sand-led, then warm secondaries.
+                "category": [
+                    tokens["accent"], "#8FB3C9", "#C99B8F", "#9DAD86",
+                    "#B8A4C9", "#D4B86A", "#7FB069", "#A6A2C2",
+                ],
+            },
+        }
+    }
+
+
+def _register_altair_theme(theme: str) -> None:
+    """Register + enable the neurobridge altair theme for the current run."""
+    try:
+        import altair as alt
+        alt.themes.register("neurobridge", lambda: _altair_theme(theme))
+        alt.themes.enable("neurobridge")
+    except Exception:
+        # altair may not be importable in some environments; chart calls
+        # will simply use altair defaults — no functional impact.
+        pass
+
+
+# --------------------------------------------------------------------------- #
+# HTTP helpers                                                                #
+# --------------------------------------------------------------------------- #
 
 def _check_api_health() -> tuple[bool, str]:
     """Ping FastAPI /health endpoint; return (ok, status_text)."""
     try:
         resp = httpx.get(f"{_API_URL}/health", timeout=2.0)
         if resp.status_code == 200:
-            return True, "ok"
+            return True, "operational"
         return False, f"http {resp.status_code}"
     except httpx.RequestError as e:
-        return False, str(type(e).__name__)
+        return False, type(e).__name__.lower()
 
 
 def _post(endpoint: str, payload: dict) -> dict:
@@ -211,12 +763,33 @@ def _get(path: str) -> dict:
     return resp.json()
 
 
-def _render_brand_header() -> None:
+# --------------------------------------------------------------------------- #
+# Hero / sidebar / section primitives                                         #
+# --------------------------------------------------------------------------- #
+
+def _render_brand_header(api_ok: bool, api_status: str) -> None:
+    """Editorial hero strip: word-mark + tagline + 3 status dots."""
+    api_class = "is-ok" if api_ok else "is-down"
+    mlflow_class = "is-mute" if _MLFLOW_DISABLED else "is-ok"
+    mlflow_label = "tracking off" if _MLFLOW_DISABLED else "tracking"
+    llm_class = "is-mute" if _LLM_DISABLED else "is-ok"
+    llm_label = "template only" if _LLM_DISABLED else "llm online"
+
     st.markdown(
-        """
-        <div class="brand-header">
-            <h1>NeuroBridge Enterprise</h1>
-            <p>Three-modality clinical ML — Data Drift, Missing Modalities, Artifacts</p>
+        f"""
+        <div class="hero">
+            <p class="hero-eyebrow">Living decision system · clinical ML</p>
+            <h1 class="hero-title">Neuro<span class="accent">Bridge</span> Enterprise</h1>
+            <p class="hero-tagline">
+                Three production pipelines — molecule, signal, image — behind one
+                auditable surface. Every prediction returns label, calibration,
+                drift, provenance and a natural-language rationale.
+            </p>
+            <div class="hero-status-row">
+                <span class="dot {api_class}">api · {_html.escape(api_status)}</span>
+                <span class="dot {mlflow_class}">mlflow · {mlflow_label}</span>
+                <span class="dot {llm_class}">explainer · {llm_label}</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -226,16 +799,18 @@ def _render_brand_header() -> None:
 def _render_section(eyebrow: str, title: str, desc: str) -> None:
     st.markdown(
         f"""
-        <p class="section-eyebrow">{eyebrow}</p>
-        <h2 class="section-title">{title}</h2>
-        <p class="section-desc">{desc}</p>
+        <div class="section">
+            <p class="section-eyebrow">{_html.escape(eyebrow)}</p>
+            <h2 class="section-title">{_html.escape(title)}</h2>
+            <p class="section-desc">{_html.escape(desc)}</p>
+        </div>
         """,
         unsafe_allow_html=True,
     )
 
 
 def _render_result(body: dict) -> None:
-    """Render a 3-metric result card + MLflow deep link."""
+    """Render a 3-metric result card + (optional) MLflow deep link."""
     cols = st.columns(3)
     cols[0].metric("Rows", f"{body['rows']:,}")
     cols[1].metric("Columns", f"{body['columns']:,}")
@@ -243,9 +818,9 @@ def _render_result(body: dict) -> None:
 
     safe_output_path = _html.escape(str(body["output_path"]))
     st.markdown(
-        f"<p style='color:#475569;margin:1rem 0 0.5rem 0;font-size:0.9rem;'>"
-        f"Output written to <code style='background:#E8ECF1;padding:2px 6px;border-radius:4px;'>"
-        f"{safe_output_path}</code></p>",
+        f"<p style='color:var(--ng-text-tertiary);"
+        f"margin:1rem 0 0.5rem 0;font-size:0.85rem;'>"
+        f"output → <code>{safe_output_path}</code></p>",
         unsafe_allow_html=True,
     )
 
@@ -254,62 +829,88 @@ def _render_result(body: dict) -> None:
         safe_run_id = _html.escape(str(run_id))
         safe_url = _html.escape(_MLFLOW_URL, quote=True)
         st.markdown(
-            f"<p class='mlflow-link'>MLflow run: "
-            f"<a href='{safe_url}/#/experiments/0/runs/{safe_run_id}' "
-            f"target='_blank' rel='noopener noreferrer'>{safe_run_id[:12]}…</a></p>",
+            f"<p style='color:var(--ng-text-tertiary);font-size:0.85rem;'>"
+            f"mlflow run · <a href='{safe_url}/#/experiments/0/runs/{safe_run_id}' "
+            f"target='_blank' rel='noopener noreferrer' "
+            f"style='color:var(--ng-accent);text-decoration:none;"
+            f"border-bottom:1px solid var(--ng-accent-ring);'>"
+            f"{safe_run_id[:12]}…</a></p>",
             unsafe_allow_html=True,
         )
     elif _MLFLOW_DISABLED:
-        st.markdown(
-            "<p style='color:#92400E;font-size:0.85rem;'>"
-            "MLflow tracking is disabled (NEUROBRIDGE_DISABLE_MLFLOW=1).</p>",
-            unsafe_allow_html=True,
-        )
+        st.caption("mlflow tracking disabled (NEUROBRIDGE_DISABLE_MLFLOW=1)")
 
 
 def _render_sidebar(api_ok: bool, api_status: str) -> None:
     with st.sidebar:
-        st.markdown("### System Status")
-        safe_api_status = _html.escape(api_status)
-        api_pill = (
-            f"<span class='status-pill status-ok'>API · {safe_api_status}</span>"
-            if api_ok
-            else f"<span class='status-pill status-down'>API · {safe_api_status}</span>"
+        st.markdown(
+            """
+            <p class="sidebar-brand">Neuro<span class="accent">Bridge</span></p>
+            <p class="sidebar-tagline">enterprise · v1</p>
+            """,
+            unsafe_allow_html=True,
         )
-        mlflow_pill = (
-            "<span class='status-pill status-warn'>MLflow · disabled</span>"
-            if _MLFLOW_DISABLED
-            else "<span class='status-pill status-ok'>MLflow · tracking</span>"
+
+        st.markdown("### Theme")
+        theme = st.session_state.get("theme", "dark")
+        is_dark = st.toggle(
+            "Dark mode",
+            value=(theme == "dark"),
+            key="theme_toggle",
+            help="Switch between editorial dark (Netflix-style) and warm paper (Apple HIG-style).",
         )
-        st.markdown(api_pill + mlflow_pill, unsafe_allow_html=True)
+        new_theme = "dark" if is_dark else "light"
+        if new_theme != theme:
+            st.session_state["theme"] = new_theme
+            st.rerun()
+
+        st.markdown("### System")
+        api_class = "is-ok" if api_ok else "is-down"
+        mlflow_class = "is-mute" if _MLFLOW_DISABLED else "is-ok"
+        llm_class = "is-mute" if _LLM_DISABLED else "is-ok"
+        st.markdown(
+            f"""
+            <div style='display:flex;flex-direction:column;gap:0.4rem;'>
+                <span class='dot {api_class}'>api · {_html.escape(api_status)}</span>
+                <span class='dot {mlflow_class}'>mlflow · {"off" if _MLFLOW_DISABLED else "on"}</span>
+                <span class='dot {llm_class}'>llm · {"template" if _LLM_DISABLED else "online"}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         st.markdown("### Endpoints")
         st.markdown(
-            f"<p style='font-size:0.8rem;color:#475569;line-height:1.7;'>"
-            f"FastAPI · <code>{_API_URL}</code><br/>"
-            f"MLflow · <code>{_MLFLOW_URL}</code></p>",
+            f"<p style='font-family:var(--ng-font-mono);font-size:0.78rem;"
+            f"color:var(--ng-text-tertiary);line-height:1.8;margin:0;'>"
+            f"fastapi · <code>{_API_URL}</code><br/>"
+            f"mlflow &nbsp;· <code>{_MLFLOW_URL}</code></p>",
             unsafe_allow_html=True,
         )
 
         st.markdown("### About")
         st.markdown(
-            "<p style='font-size:0.85rem;color:#475569;line-height:1.6;'>"
-            "Solving Data Drift, Missing Modalities, and Artifacts in clinical "
-            "biosignal pipelines. Three production modalities behind one FastAPI "
-            "surface, all runs tracked to MLflow.</p>",
+            "<p style='font-size:0.86rem;color:var(--ng-text-secondary);"
+            "line-height:1.65;margin:0;'>"
+            "Trust-engineered clinical-ML platform. Three modalities — BBB drug "
+            "screening, EEG signal cleaning, MRI multi-site harmonization — "
+            "behind one FastAPI surface. Every inference is auditable.</p>",
             unsafe_allow_html=True,
         )
 
+
+# --------------------------------------------------------------------------- #
+# Tabs                                                                        #
+# --------------------------------------------------------------------------- #
 
 def _render_bbb_tab() -> None:
     _render_section(
         "MOLECULE — BBBP",
         "Blood-Brain-Barrier permeability decision",
         "Enter a SMILES string. The system computes a 2,048-bit Morgan "
-        "fingerprint, runs it through a trained Random Forest classifier, "
-        "and returns the predicted permeability label, the model's "
-        "self-rated confidence, and the top SHAP feature attributions "
-        "explaining the decision.",
+        "fingerprint, runs it through a Random Forest classifier, and returns "
+        "a label, calibration-grounded confidence, drift signal, and the top "
+        "SHAP attributions explaining the decision.",
     )
 
     EDGE_CASES = {
@@ -350,13 +951,13 @@ def _render_bbb_tab() -> None:
     }
 
     case_name = st.selectbox(
-        "Test Edge Cases",
+        "Test edge cases",
         options=list(EDGE_CASES.keys()),
         index=0,
         key="bbb_case",
         help=(
-            "Pick a robustness probe. Each case demonstrates how the "
-            "system handles a real-world failure mode — invalid input, "
+            "Pick a robustness probe. Each case demonstrates how the system "
+            "handles a real-world failure mode — invalid input, "
             "out-of-distribution molecules, or boundary conditions."
         ),
     )
@@ -374,11 +975,11 @@ def _render_bbb_tab() -> None:
     )
 
     if st.button("Predict BBB permeability", type="primary", key="bbb_predict"):
-        with st.spinner("Computing fingerprint, predicting, and explaining…"):
+        with st.spinner("Computing fingerprint, predicting, explaining…"):
             try:
                 result = _post("/predict/bbb", {"smiles": smiles, "top_k": top_k})
                 _render_prediction_card(result)
-                st.toast("Prediction complete", icon="✅")
+                st.toast("Prediction complete", icon="✓")
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 503:
                     st.error(
@@ -387,8 +988,7 @@ def _render_bbb_tab() -> None:
                         "then retry."
                     )
                 elif e.response.status_code == 400:
-                    # Robustness story: show the WARNING instead of an ERROR
-                    # — invalid input is a recoverable path, not a crash.
+                    # Robustness story: WARNING (recoverable), not ERROR.
                     st.warning(
                         f"Robustness check passed: API rejected the input "
                         f"with HTTP 400 (no crash). Detail: "
@@ -412,22 +1012,29 @@ def _render_eeg_tab() -> None:
         "across fixed-duration epochs.",
     )
     eeg_in = st.text_input("Input FIF/EDF path", "data/raw/eeg.fif", key="eeg_in")
-    eeg_out = st.text_input("Output Parquet path", "data/processed/eeg_features.parquet", key="eeg_out")
+    eeg_out = st.text_input(
+        "Output Parquet path",
+        "data/processed/eeg_features.parquet",
+        key="eeg_out",
+    )
     if st.button("Run EEG pipeline", type="primary", key="eeg_run"):
         with st.spinner("Filtering and running ICA…"):
             try:
-                result = _post("/pipeline/eeg", {
-                    "input_path": eeg_in, "output_path": eeg_out,
-                })
+                result = _post(
+                    "/pipeline/eeg",
+                    {"input_path": eeg_in, "output_path": eeg_out},
+                )
                 st.session_state["last_eeg_run"] = result
                 _render_result(result)
-                st.toast("EEG pipeline complete", icon="✅")
+                st.toast("EEG pipeline complete", icon="✓")
             except httpx.HTTPStatusError as e:
-                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+                st.error(
+                    f"Pipeline failed (HTTP {e.response.status_code}): "
+                    f"{e.response.text}"
+                )
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
 
-    # Day-8 T1C: AI Assistant inline for EEG
     last_eeg = st.session_state.get("last_eeg_run")
     if last_eeg is not None:
         with st.expander("Ask the AI Assistant about this EEG run", expanded=False):
@@ -463,7 +1070,10 @@ def _render_eeg_tab() -> None:
                             f"Model: `{eeg_resp.get('model') or '—'}`"
                         )
                     except httpx.HTTPStatusError as e:
-                        st.error(f"Assistant failed (HTTP {e.response.status_code}): {e.response.text}")
+                        st.error(
+                            f"Assistant failed (HTTP {e.response.status_code}): "
+                            f"{e.response.text}"
+                        )
                     except httpx.RequestError as e:
                         st.error(f"Cannot reach FastAPI: {e!r}")
 
@@ -473,16 +1083,21 @@ def _render_mri_tab() -> None:
         "IMAGE — MRI",
         "Multi-site harmonization via ComBat",
         "Loads NIfTI volumes, masks brain tissue, computes per-ROI summary "
-        "statistics, then harmonizes across acquisition sites with neuroHarmonize "
-        "to remove scanner-driven domain shift. The diagnostic plot below "
-        "compares per-site feature distributions before and after harmonization."
+        "statistics, then harmonizes across acquisition sites with "
+        "neuroHarmonize to remove scanner-driven domain shift. The diagnostic "
+        "plot below compares per-site feature distributions before and after "
+        "harmonization.",
     )
     mri_dir = st.text_input(
-        "Input NIfTI directory", "tests/fixtures/mri_sample", key="mri_dir",
+        "Input NIfTI directory",
+        "tests/fixtures/mri_sample",
+        key="mri_dir",
         help="Path to a directory of .nii(.gz) files + sites.csv",
     )
     sites_csv = st.text_input(
-        "Sites CSV", "tests/fixtures/mri_sample/sites.csv", key="mri_sites",
+        "Sites CSV",
+        "tests/fixtures/mri_sample/sites.csv",
+        key="mri_sites",
     )
 
     if st.button("Run ComBat diagnostics", type="primary", key="mri_diag"):
@@ -493,7 +1108,7 @@ def _render_mri_tab() -> None:
                     {"input_dir": mri_dir, "sites_csv": sites_csv},
                 )
                 _render_combat_diagnostics(result)
-                st.toast("Diagnostics complete", icon="✅")
+                st.toast("Diagnostics complete", icon="✓")
             except httpx.HTTPStatusError as e:
                 st.error(
                     f"Diagnostics failed (HTTP {e.response.status_code}): "
@@ -504,117 +1119,117 @@ def _render_mri_tab() -> None:
 
 
 def _render_prediction_card(result: dict) -> None:
-    """Render a B2B-styled decision card: label badge + confidence + SHAP bars."""
+    """Editorial decision card: provenance · verdict · signals · SHAP."""
     st.session_state["last_bbb_prediction"] = result
-    provenance = result.get("provenance")
-    if provenance is not None:
-        run_id = provenance.get("mlflow_run_id")
-        run_label = run_id[:8] if run_id else "—"
-        train_date = provenance.get("train_date") or "—"
-        n_examples = provenance.get("n_examples")
-        n_label = f"n={n_examples}" if n_examples else "n=—"
-        st.caption(
-            f"🔎 MLflow run **{run_label}** · "
-            f"Model **{provenance.get('model_version', 'v1')}** · "
-            f"trained {train_date} · {n_label}"
-        )
     label_text = _html.escape(str(result["label_text"]))
-    badge_color = "#166534" if result["label"] == 1 else "#991B1B"
-    badge_bg    = "#DCFCE7" if result["label"] == 1 else "#FEE2E2"
-    confidence_pct = result["confidence"] * 100
+    confidence_pct = float(result["confidence"]) * 100
 
-    st.markdown(
-        f"""
-        <div style='background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;
-                    padding:1.5rem;margin:1rem 0;box-shadow:0 1px 2px rgba(15,23,42,0.04);'>
-            <p style='font-size:0.72rem;font-weight:700;color:#64748B;
-                      letter-spacing:0.08em;text-transform:uppercase;margin:0;'>Prediction</p>
-            <div style='display:flex;align-items:center;gap:0.75rem;margin-top:0.4rem;'>
-                <span style='background:{badge_bg};color:{badge_color};
-                             padding:0.4rem 0.9rem;border-radius:999px;
-                             font-size:1rem;font-weight:700;letter-spacing:0.01em;'>
-                    {label_text.upper()}
-                </span>
-                <span style='color:#475569;font-size:0.95rem;'>
-                    Model confidence: <strong style='color:#0F172A;'>{confidence_pct:.1f}%</strong>
-                </span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # 1) Provenance strip (auditable line)
+    provenance = result.get("provenance") or {}
+    run_id = provenance.get("mlflow_run_id")
+    run_label = run_id[:8] if run_id else "—"
+    train_date = provenance.get("train_date") or "—"
+    model_version = provenance.get("model_version", "v1")
+    n_examples = provenance.get("n_examples")
+    n_label = f"n={n_examples}" if n_examples else "n=—"
 
-    # Confidence bar
-    st.markdown(
-        "<p style='font-size:0.72rem;font-weight:700;color:#64748B;"
-        "letter-spacing:0.08em;text-transform:uppercase;margin:1rem 0 0.4rem 0;'>"
-        "Confidence</p>",
-        unsafe_allow_html=True,
-    )
-    st.progress(float(result["confidence"]))
+    # 2) Build signal rows: calibration, drift
+    signal_rows: list[tuple[str, str]] = []
 
-    # Trust caption — precision-at-confidence from held-out 20% test split.
-    # Silent skip when the API response has no calibration field (legacy models).
     calibration = result.get("calibration")
     if calibration is not None:
-        threshold_pct = round(calibration["threshold"] * 100)
-        precision_pct = round(calibration["precision"] * 100)
-        support = calibration["support"]
+        threshold_pct = round(float(calibration["threshold"]) * 100)
+        precision_pct = round(float(calibration["precision"]) * 100)
+        support = int(calibration["support"])
         if support == 0:
-            st.caption(
-                "📊 Bu güven aralığında held-out test örneği yok — "
-                "kalibrasyon bilgisi mevcut değil."
-            )
+            cal_str = "no held-out support in this band"
         else:
-            st.caption(
-                f"📊 Test set'te ≥{threshold_pct}% güven üreten tahminlerin "
-                f"precision'ı **{precision_pct}%** (n={support})."
+            cal_str = (
+                f"≥{threshold_pct}% confident → "
+                f"<strong>{precision_pct}%</strong> precision · n={support}"
             )
+        signal_rows.append(("calibration", cal_str))
 
     drift_z = result.get("drift_z")
-    rolling_n = result.get("rolling_n", 0)
+    rolling_n = int(result.get("rolling_n", 0))
     if drift_z is None and rolling_n < 10:
-        st.caption(
-            f"📈 Drift: warming up ({rolling_n}/10 predictions buffered)."
-        )
+        drift_str = f"warming up · {rolling_n}/10 buffered"
     elif drift_z is None:
-        st.caption(
-            "📈 Drift: unavailable (model lacks train-time confidence stats)."
-        )
+        drift_str = "unavailable · model lacks train-time stats"
     else:
-        # Sign + magnitude: |z| < 1 in-band, 1–2 mild, >=2 significant.
         if abs(drift_z) < 1.0:
             tag = "within expected range"
         elif abs(drift_z) < 2.0:
             tag = "mild distribution shift"
         else:
             tag = "significant shift — retrain recommended"
-        st.caption(
-            f"📈 Drift: trailing-{rolling_n} confidence median is "
-            f"**{drift_z:+.2f}σ** from train-time distribution ({tag})."
+        drift_str = (
+            f"trailing-{rolling_n} median <strong>{drift_z:+.2f}σ</strong> · {tag}"
         )
+    signal_rows.append(("drift", drift_str))
+
+    signals_html = "".join(
+        f'<div class="signal-row"><span class="signal-key">{k}</span>'
+        f'<span class="signal-value">{v}</span></div>'
+        for k, v in signal_rows
+    )
+
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="provenance-strip">
+                <span>mlflow · <strong>{_html.escape(run_label)}</strong></span>
+                <span>model · <strong>{_html.escape(model_version)}</strong></span>
+                <span>trained · <strong>{_html.escape(train_date)}</strong></span>
+                <span><strong>{_html.escape(n_label)}</strong></span>
+            </div>
+            <div class="verdict">
+                <p class="verdict-label">verdict</p>
+                <p class="verdict-value">{label_text.lower()}</p>
+                <p class="verdict-confidence">
+                    Model confidence · <strong>{confidence_pct:.1f}%</strong>
+                </p>
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Native progress bar — themed via CSS variables
+    st.progress(float(result["confidence"]))
+
+    st.markdown(
+        f"""
+            <div class="signals">
+                {signals_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # SHAP attributions chart
     n_features = len(result["top_features"])
     st.markdown(
-        f"<p style='font-size:0.72rem;font-weight:700;color:#64748B;"
-        f"letter-spacing:0.08em;text-transform:uppercase;margin:1.5rem 0 0.4rem 0;'>"
-        f"Top {n_features} SHAP attributions</p>",
+        f'<p class="section-eyebrow" style="margin-top:1.5rem;">'
+        f'top {n_features} shap attributions</p>',
         unsafe_allow_html=True,
     )
     import pandas as pd
     shap_df = pd.DataFrame(result["top_features"]).set_index("feature")
-    st.bar_chart(shap_df, height=240, color="#0369A1")
+    # Keep st.bar_chart for simplicity; the wrapper now sits in a themed frame.
+    st.bar_chart(shap_df, height=240, color=_TOKENS_DARK["accent"]
+                 if st.session_state.get("theme", "dark") == "dark"
+                 else _TOKENS_LIGHT["accent"])
 
     st.caption(
         "Positive SHAP values pushed the model toward the predicted class; "
-        "negative values pushed it away. Feature names are 2,048-bit Morgan "
+        "negative values pushed it away. Features are 2,048-bit Morgan "
         "fingerprint indices (`fp_<bit>`)."
     )
 
 
 def _render_combat_diagnostics(result: dict) -> None:
-    """Render the Pre/Post-ComBat KDE comparison + site-gap KPI strip."""
+    """Pre/Post-ComBat KDE comparison + 3-metric site-gap KPI strip."""
     import altair as alt
     import pandas as pd
 
@@ -633,17 +1248,15 @@ def _render_combat_diagnostics(result: dict) -> None:
         "Reduction factor",
         f"{result['reduction_factor']:.0f}×",
         help=(
-            "Pre-gap / Post-gap. A 100× reduction means ComBat "
-            "removed two orders of magnitude of site-driven domain shift."
+            "Pre-gap / Post-gap. A 100× reduction means ComBat removed "
+            "two orders of magnitude of site-driven domain shift."
         ),
     )
 
     df = pd.DataFrame(rows)
-    # Pin the chart to the first feature (most recognizable for the audience).
     feat = df["feature"].iloc[0]
     feat_df = df[df["feature"] == feat]
 
-    # Layered KDE: x = feature_value, color = site, faceted by harmonization_state.
     chart = (
         alt.Chart(feat_df)
         .transform_density(
@@ -651,14 +1264,13 @@ def _render_combat_diagnostics(result: dict) -> None:
             groupby=["site", "harmonization_state"],
             as_=["feature_value", "density"],
         )
-        .mark_area(opacity=0.55)
+        .mark_area(opacity=0.5)
         .encode(
             x=alt.X("feature_value:Q", title=f"{feat} (intensity)"),
             y=alt.Y("density:Q", title="Density"),
             color=alt.Color(
                 "site:N",
                 title="Site",
-                scale=alt.Scale(scheme="tableau10"),
             ),
             tooltip=[
                 alt.Tooltip("site:N"),
@@ -672,7 +1284,6 @@ def _render_combat_diagnostics(result: dict) -> None:
                 "harmonization_state:N",
                 title=None,
                 sort=["Pre-ComBat", "Post-ComBat"],
-                header=alt.Header(labelFontSize=13, labelFontWeight="bold"),
             )
         )
         .resolve_scale(x="shared", y="shared")
@@ -680,14 +1291,13 @@ def _render_combat_diagnostics(result: dict) -> None:
     st.altair_chart(chart, use_container_width=True)
 
     st.caption(
-        f"Per-site density of `{feat}` before and after ComBat. Each "
-        f"colored region is one acquisition site. **Convergence of the "
-        f"colored regions in the Post-ComBat panel is the visual proof "
-        f"of harmonization** — the same property the {result['reduction_factor']:.0f}× "
-        f"site-gap reduction quantifies."
+        f"Per-site density of `{feat}` before and after ComBat. Each colored "
+        f"region is one acquisition site. **Convergence of the colored "
+        f"regions in the Post-ComBat panel is the visual proof of "
+        f"harmonization** — the same property the "
+        f"{result['reduction_factor']:.0f}× site-gap reduction quantifies."
     )
 
-    # Day-8 T1C: AI Assistant inline for MRI
     n_subjects = len({r["subject_id"] for r in result.get("rows", [])})
     with st.expander("Ask the AI Assistant about this ComBat run", expanded=False):
         mri_q_presets = [
@@ -722,34 +1332,39 @@ def _render_combat_diagnostics(result: dict) -> None:
                         f"Model: `{mri_resp.get('model') or '—'}`"
                     )
                 except httpx.HTTPStatusError as e:
-                    st.error(f"Assistant failed (HTTP {e.response.status_code}): {e.response.text}")
+                    st.error(
+                        f"Assistant failed (HTTP {e.response.status_code}): "
+                        f"{e.response.text}"
+                    )
                 except httpx.RequestError as e:
                     st.error(f"Cannot reach FastAPI: {e!r}")
 
 
 def _render_ai_assistant_tab() -> None:
-    """Day-7 T3C: chat-style explainer for the most recent BBB prediction."""
+    """Chat-style explainer for the most recent BBB prediction."""
     _render_section(
         "AI Assistant",
         "Natural-language rationale (LLM or deterministic template)",
-        "Pulls the most recent BBB prediction from this session and asks "
-        "the explainer to justify it. Falls back to a deterministic, "
-        "auditable template when no LLM is configured."
+        "Pulls the most recent BBB prediction from this session and asks the "
+        "explainer to justify it. Falls back to a deterministic, auditable "
+        "template when no LLM is configured.",
     )
 
     last = st.session_state.get("last_bbb_prediction")
     if last is None:
         st.info(
-            "Run a BBB prediction first (BBB tab → Predict button), "
+            "Run a BBB prediction first (Molecule tab → Predict button), "
             "then come back here to ask the assistant about it."
         )
         return
 
-    # Snapshot card so the user knows which prediction is being explained
+    top_features_preview = ", ".join(
+        f["feature"] for f in last.get("top_features", [])[:3]
+    )
     st.caption(
         f"Latest prediction: **{last['label_text']}** "
         f"({float(last['confidence']) * 100:.0f}% confident)  ·  "
-        f"Top SHAP: {', '.join(f['feature'] for f in last.get('top_features', [])[:3])}"
+        f"Top SHAP: {top_features_preview}"
     )
 
     PRESETS = [
@@ -762,7 +1377,10 @@ def _render_ai_assistant_tab() -> None:
         "Or type your own question (optional)",
         value="",
         key="ai_custom",
-        help="Custom questions only affect the LLM path; the template gives a generic SHAP-driven rationale either way.",
+        help=(
+            "Custom questions only affect the LLM path; the template gives a "
+            "generic SHAP-driven rationale either way."
+        ),
     )
     question = custom.strip() or preset
 
@@ -779,10 +1397,6 @@ def _render_ai_assistant_tab() -> None:
                     "drift_z": last.get("drift_z"),
                     "user_question": question,
                 }
-                # The /predict/bbb response payload doesn't include the
-                # user-supplied SMILES (only label/confidence/etc.), so
-                # pull it from the input widget for paper-trail accuracy.
-                # Streamlit text inputs persist via st.session_state.
                 if not body["smiles"]:
                     body["smiles"] = st.session_state.get("bbb_smiles", "")
                 resp = _post("/explain/bbb", body)
@@ -799,28 +1413,26 @@ def _render_ai_assistant_tab() -> None:
         history = st.session_state.setdefault("explain_history", [])
         history.insert(0, (question, resp))
 
-    # Render history (most recent first)
     history = st.session_state.get("explain_history", [])
     if history:
         st.markdown("### Conversation")
-        for q, r in history[:10]:  # cap at 10 most recent
-            with st.container():
-                st.markdown(f"**Q:** {q}")
-                st.markdown(f"**A:** {r['rationale']}")
-                source = r.get("source", "?")
-                model = r.get("model") or "—"
-                st.caption(f"Source: `{source}`  ·  Model: `{model}`")
-                st.divider()
+        for q, r in history[:10]:
+            st.markdown(f"**Q:** {q}")
+            st.markdown(f"**A:** {r['rationale']}")
+            source = r.get("source", "?")
+            model = r.get("model") or "—"
+            st.caption(f"Source: `{source}`  ·  Model: `{model}`")
+            st.divider()
 
 
 def _render_experiments_tab() -> None:
-    """Day-8 T2B: MLflow runs table + two-run diff (Track 5)."""
+    """MLflow runs table + two-run diff (Track 5)."""
     _render_section(
         "Experiments — MLOps Audit",
         "MLflow runs across BBB / EEG / MRI experiments",
-        "Lists every recorded training run; pick any two to see "
-        "a side-by-side metric + parameter diff. Foundation for "
-        "auditable, reproducible model lineage."
+        "Lists every recorded training run; pick any two to see a side-by-side "
+        "metric + parameter diff. Foundation for auditable, reproducible "
+        "model lineage.",
     )
 
     if st.button("Refresh runs", key="exp_refresh"):
@@ -833,7 +1445,10 @@ def _render_experiments_tab() -> None:
             runs = data.get("runs", [])
             st.session_state["experiments_runs_cache"] = runs
         except httpx.HTTPStatusError as e:
-            st.error(f"Failed to load runs (HTTP {e.response.status_code}): {e.response.text}")
+            st.error(
+                f"Failed to load runs (HTTP {e.response.status_code}): "
+                f"{e.response.text}"
+            )
             return
         except httpx.RequestError as e:
             st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
@@ -841,26 +1456,25 @@ def _render_experiments_tab() -> None:
 
     if not runs:
         st.info(
-            "No MLflow runs found. Trigger a pipeline (BBB / EEG / MRI) "
-            "first, then refresh this tab. (If MLflow is disabled via "
-            "NEUROBRIDGE_DISABLE_MLFLOW=1, this list will stay empty.)"
+            "No MLflow runs found. Trigger a pipeline first (Molecule / "
+            "Signal / Image), then refresh this tab. (Under "
+            "NEUROBRIDGE_DISABLE_MLFLOW=1 the list will stay empty.)"
         )
         return
 
-    # Render the runs table with a flat preview of metrics + params
-    rows_preview = []
-    for run in runs:
-        rows_preview.append({
+    rows_preview = [
+        {
             "run_id": run["run_id"][:8],
             "experiment": run["experiment_name"],
-            "start_time": run["start_time"][:19],  # YYYY-MM-DDTHH:MM:SS
+            "start_time": run["start_time"][:19],
             "status": run["status"],
             "n_metrics": len(run["metrics"]),
             "n_params": len(run["params"]),
-        })
+        }
+        for run in runs
+    ]
     st.dataframe(rows_preview, use_container_width=True, hide_index=True)
 
-    # Run-vs-run diff selector
     st.markdown("### Compare two runs")
     run_ids = [r["run_id"] for r in runs]
     if len(run_ids) < 2:
@@ -869,15 +1483,28 @@ def _render_experiments_tab() -> None:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        sel_a = st.selectbox("Run A", options=run_ids, format_func=lambda x: x[:8], key="diff_a")
+        sel_a = st.selectbox(
+            "Run A", options=run_ids,
+            format_func=lambda x: x[:8], key="diff_a",
+        )
     with col_b:
-        sel_b = st.selectbox("Run B", options=run_ids, index=min(1, len(run_ids) - 1), format_func=lambda x: x[:8], key="diff_b")
+        sel_b = st.selectbox(
+            "Run B", options=run_ids,
+            index=min(1, len(run_ids) - 1),
+            format_func=lambda x: x[:8], key="diff_b",
+        )
 
     if st.button("Show diff", type="primary", key="exp_diff_go"):
         try:
-            diff = _post("/experiments/diff", {"run_id_a": sel_a, "run_id_b": sel_b})
+            diff = _post(
+                "/experiments/diff",
+                {"run_id_a": sel_a, "run_id_b": sel_b},
+            )
         except httpx.HTTPStatusError as e:
-            st.error(f"Diff failed (HTTP {e.response.status_code}): {e.response.text}")
+            st.error(
+                f"Diff failed (HTTP {e.response.status_code}): "
+                f"{e.response.text}"
+            )
             return
         rows = diff.get("rows", [])
         if not rows:
@@ -896,6 +1523,10 @@ def _render_experiments_tab() -> None:
         st.dataframe(diff_table, use_container_width=True, hide_index=True)
 
 
+# --------------------------------------------------------------------------- #
+# Entrypoint                                                                  #
+# --------------------------------------------------------------------------- #
+
 def main() -> None:
     """Streamlit entrypoint. Idempotent — Streamlit re-runs on every interaction."""
     st.set_page_config(
@@ -904,23 +1535,26 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
+
+    theme = _init_theme()
+    st.markdown(_build_css(theme), unsafe_allow_html=True)
+    _register_altair_theme(theme)
 
     api_ok, api_status = _check_api_health()
-    _render_brand_header()
+    _render_brand_header(api_ok, api_status)
     _render_sidebar(api_ok, api_status)
 
     if not api_ok:
         st.warning(
-            f"⚠️ FastAPI surface is not reachable at `{_API_URL}` ({api_status}). "
+            f"FastAPI surface is not reachable at `{_API_URL}` ({api_status}). "
             "Pipeline runs will fail until the API service is up. "
             "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
         )
 
     bbb_tab, eeg_tab, mri_tab, assistant_tab, experiments_tab = st.tabs([
-        "Molecule (BBB)",
-        "Signal (EEG)",
-        "Image (MRI)",
+        "Molecule",
+        "Signal",
+        "Image",
         "AI Assistant",
         "Experiments",
     ])
