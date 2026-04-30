@@ -437,6 +437,100 @@ def run_pipeline(
         pass
 
 
+def compute_harmonization_diagnostics(
+    input_dir: Path,
+    sites_csv: Path | None = None,
+    intensity_threshold: float | None = None,
+    n_roi_axes: tuple[int, int, int] = DEFAULT_N_ROI_AXES,
+) -> pd.DataFrame:
+    """Run the MRI pipeline twice — pre-ComBat features and post-ComBat —
+    and return a long-format DataFrame ready for visualization.
+
+    Output columns: ``subject_id``, ``site``, ``feature``, ``feature_value``,
+    ``harmonization_state`` ('Pre-ComBat' or 'Post-ComBat').
+
+    Used by the FastAPI ``/pipeline/mri/diagnostics`` endpoint to feed the
+    Streamlit MRI tab's KDE / histogram comparison plot.
+
+    Raises:
+        FileNotFoundError: if ``input_dir`` does not exist.
+        KeyError: if any subject is missing a site assignment.
+    """
+    input_dir = Path(input_dir)
+    if not input_dir.exists():
+        raise FileNotFoundError(f"MRI input directory not found: {input_dir}")
+    sites_csv = Path(sites_csv) if sites_csv is not None else input_dir / "sites.csv"
+    sites_df = pd.read_csv(sites_csv)
+
+    feature_cols = [
+        f"feat_roi{i}_{stat}"
+        for i in range(int(np.prod(n_roi_axes)))
+        for stat in ROI_STATS
+    ]
+
+    rows: list[dict[str, object]] = []
+    for nifti_path in sorted(input_dir.glob("*.nii*")):
+        subject_id = nifti_path.stem.replace(".nii", "")
+        volume = nib.load(nifti_path).get_fdata()
+        if not is_valid_volume(volume):
+            continue
+        mask = mask_brain(volume, intensity_threshold=intensity_threshold)
+        feats = extract_features_from_volume(
+            volume, mask, n_roi_axes=n_roi_axes,
+        )
+        row: dict[str, object] = {"subject_id": subject_id}
+        row.update(feats)
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "subject_id", "site", "feature", "feature_value", "harmonization_state",
+        ])
+
+    raw_features = pd.DataFrame(rows).merge(sites_df, on="subject_id", how="left")
+    if raw_features["site"].isna().any():
+        missing = raw_features.loc[raw_features["site"].isna(), "subject_id"].tolist()
+        raise KeyError(
+            f"sites_csv missing site assignment for subjects: {missing}"
+        )
+
+    # Post-ComBat: variance-aware harmonization. Reuses the same logic as
+    # run_pipeline so diagnostics reflect production behavior exactly.
+    col_std = raw_features[feature_cols].std()
+    var_feature_cols = [
+        c for c in feature_cols if col_std[c] > _MIN_VAR_THRESHOLD
+    ]
+    zero_var_cols = [
+        c for c in feature_cols if col_std[c] <= _MIN_VAR_THRESHOLD
+    ]
+    if not var_feature_cols:
+        harmonized = raw_features[feature_cols].copy()
+    else:
+        harmonized = harmonize_combat(
+            raw_features, raw_features["site"], var_feature_cols,
+        )
+        for c in zero_var_cols:
+            harmonized[c] = raw_features[c].to_numpy()
+        harmonized = harmonized[feature_cols]
+    post_features = pd.concat(
+        [raw_features[["subject_id", "site"]].reset_index(drop=True),
+         harmonized.reset_index(drop=True)],
+        axis=1,
+    )
+
+    long_pre = raw_features.melt(
+        id_vars=["subject_id", "site"], value_vars=feature_cols,
+        var_name="feature", value_name="feature_value",
+    )
+    long_pre["harmonization_state"] = "Pre-ComBat"
+    long_post = post_features.melt(
+        id_vars=["subject_id", "site"], value_vars=feature_cols,
+        var_name="feature", value_name="feature_value",
+    )
+    long_post["harmonization_state"] = "Post-ComBat"
+    return pd.concat([long_pre, long_post], ignore_index=True)
+
+
 if __name__ == "__main__":
     # Day-3 CLI entrypoint — runs with default paths against `data/raw/mri/`.
     # Expects `data/raw/mri/sites.csv` with columns `subject_id, site`.

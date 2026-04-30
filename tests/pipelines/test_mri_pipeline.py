@@ -466,3 +466,43 @@ class TestMRIPipelineMLflow:
         assert len(runs) >= 1
         assert "metrics.subjects_out" in runs.columns
         assert runs.iloc[0]["metrics.subjects_out"] > 0
+
+
+class TestComputeHarmonizationDiagnostics:
+    def test_returns_long_format_with_pre_and_post_states(self, tmp_path: Path):
+        from tests.fixtures.build_mri_fixture import build as build_mri
+        from src.pipelines.mri_pipeline import compute_harmonization_diagnostics
+
+        fixture_dir = build_mri(out_dir=tmp_path / "mri")
+        diagnostics = compute_harmonization_diagnostics(
+            input_dir=fixture_dir,
+            sites_csv=fixture_dir / "sites.csv",
+        )
+        assert "feature_value" in diagnostics.columns
+        assert "site" in diagnostics.columns
+        assert "harmonization_state" in diagnostics.columns
+        assert "feature" in diagnostics.columns
+        states = set(diagnostics["harmonization_state"].unique())
+        assert states == {"Pre-ComBat", "Post-ComBat"}
+
+    def test_post_combat_site_gap_is_smaller_than_pre(self, tmp_path: Path):
+        """Day-3 demonstrated 5.0 → 0.0015 gap reduction. This regression
+        test pins the property: post-ComBat per-site means MUST be closer
+        together than pre-ComBat per-site means."""
+        from tests.fixtures.build_mri_fixture import build as build_mri
+        from src.pipelines.mri_pipeline import compute_harmonization_diagnostics
+
+        fixture_dir = build_mri(out_dir=tmp_path / "mri")
+        diagnostics = compute_harmonization_diagnostics(
+            input_dir=fixture_dir,
+            sites_csv=fixture_dir / "sites.csv",
+        )
+        pre = diagnostics[diagnostics["harmonization_state"] == "Pre-ComBat"]
+        post = diagnostics[diagnostics["harmonization_state"] == "Post-ComBat"]
+        # Compute site-gap as range of per-site means on the first feature
+        feat = diagnostics["feature"].iloc[0]
+        pre_gap = pre[pre["feature"] == feat].groupby("site")["feature_value"].mean().agg(lambda s: s.max() - s.min())
+        post_gap = post[post["feature"] == feat].groupby("site")["feature_value"].mean().agg(lambda s: s.max() - s.min())
+        assert post_gap < pre_gap, (
+            f"Expected post-gap < pre-gap, got pre={pre_gap}, post={post_gap}"
+        )
