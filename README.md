@@ -13,6 +13,7 @@ and Docker shipping.
 | 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped — 30 tests green |
 | 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped — 67 tests green |
 | 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped — 106 tests green |
+| 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped — 142 tests green |
 
 ## Quick Start
 
@@ -57,6 +58,19 @@ Result lives at `data/processed/mri_features.parquet` (48 ROI features per subje
 > **Real BBBP data:** not bundled (gitignored). Download from
 > [Kaggle](https://www.kaggle.com/datasets/priyanagda/bbbp) or
 > [MoleculeNet](https://moleculenet.org/datasets-1); place as `data/raw/bbbp.csv`.
+
+### Run the full stack with Docker
+
+```bash
+docker compose up
+```
+
+Then browse to:
+- **FastAPI Swagger** — <http://localhost:8000/docs>
+- **Streamlit dashboard** — `streamlit run src/frontend/app.py` (port 8501; not in compose by default)
+- **MLflow UI** — <http://localhost:5000>
+
+Live-demo robustness: if the MLflow service is unreachable, set `NEUROBRIDGE_DISABLE_MLFLOW=1` to make the pipelines run without tracking.
 
 ## Repository Layout
 
@@ -139,8 +153,7 @@ finishes in under 4 seconds on a 2024 laptop.
 
 - **Day 2 (shipped):** `eeg_pipeline.py` — bandpass + MNE ICA artifact removal + PSD + statistical features → Parquet.
 - **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet (48 features, 106 tests green).
-- **Day 4+:** FastAPI surface in `src/api/`, MLflow experiment tracking, Docker images,
-  CI.
+- **Day 4 (shipped):** FastAPI surface in `src/api/` (POST `/pipeline/{bbb,eeg,mri}` + `/health`), MLflow experiment tracking via `src.core.tracking` (see AGENTS.md §7), Streamlit dashboard at `src/frontend/app.py`, and Docker / `docker-compose.yml` for the api + MLflow stack — 142 tests green.
 
 ## Where to Look
 
@@ -152,3 +165,9 @@ finishes in under 4 seconds on a 2024 laptop.
 - **EEG pipeline:** [`src/pipelines/eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) + [`tests/pipelines/test_eeg_pipeline.py`](tests/pipelines/test_eeg_pipeline.py)
 - **Day-3 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-01-day3-mri-combat-pipeline.md`](docs/superpowers/plans/2026-05-01-day3-mri-combat-pipeline.md)
 - **MRI pipeline:** [`src/pipelines/mri_pipeline.py`](src/pipelines/mri_pipeline.py) + [`tests/pipelines/test_mri_pipeline.py`](tests/pipelines/test_mri_pipeline.py)
+- **Day-4 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-02-day4-api-mlops-frontend.md`](docs/superpowers/plans/2026-05-02-day4-api-mlops-frontend.md)
+- **Shared core helpers:** [`src/core/determinism.py`](src/core/determinism.py), [`src/core/storage.py`](src/core/storage.py), [`src/core/tracking.py`](src/core/tracking.py)
+- **FastAPI surface:** [`src/api/main.py`](src/api/main.py), [`src/api/routes.py`](src/api/routes.py), [`src/api/schemas.py`](src/api/schemas.py)
+- **Streamlit dashboard:** [`src/frontend/app.py`](src/frontend/app.py)
+- **Container stack:** [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml)
+- **Day-4 tests:** [`tests/api/`](tests/api/), [`tests/frontend/`](tests/frontend/), [`tests/pipelines/test_cross_pipeline_smoke.py`](tests/pipelines/test_cross_pipeline_smoke.py)

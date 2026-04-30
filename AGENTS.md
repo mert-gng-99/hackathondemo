@@ -27,18 +27,36 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 ```
 .
 ├── AGENTS.md                 # This file
+├── README.md
 ├── requirements.txt
 ├── pytest.ini
+├── conftest.py               # Repo-wide pytest fixtures (autouse: pins MLFLOW_TRACKING_URI to tmp dir for test isolation)
+├── Dockerfile                # Production image (FastAPI + pipelines)
+├── docker-compose.yml        # api + mlflow services for local stack
+├── .dockerignore
+├── .streamlit/
+│   └── config.toml           # Streamlit theme tokens
 ├── data/
 │   ├── raw/                  # Untouched source data. NEVER train on this directly.
 │   └── processed/            # Pipeline output as Parquet (preserves dtypes; overwritten each run; see §4).
 ├── src/
-│   ├── api/                  # FastAPI routers, request/response schemas
+│   ├── api/                  # FastAPI surface
+│   │   ├── main.py           # App factory + /health
+│   │   ├── routes.py         # POST /pipeline/{bbb,eeg,mri} dispatch
+│   │   └── schemas.py        # Shared Pydantic request/response models
+│   ├── core/                 # Cross-cutting utilities
+│   │   ├── logger.py         # Structured logger (mandatory in every pipeline)
+│   │   ├── determinism.py    # Thread-pin env vars (OMP/OPENBLAS/MKL/pyarrow)
+│   │   ├── storage.py        # Parquet read/write helpers (snappy, single-threaded, deterministic)
+│   │   └── tracking.py       # MLflow `track_pipeline_run` context manager (see §7)
 │   ├── pipelines/            # One file per modality. Pure functions + a `run_pipeline()` entry.
-│   └── core/                 # Cross-cutting utilities: logging, config (MLflow helpers planned)
+│   └── frontend/
+│       └── app.py            # Streamlit dashboard (3 tabs, one per modality)
 └── tests/
     ├── core/
-    ├── pipelines/
+    ├── api/
+    ├── frontend/
+    ├── pipelines/            # incl. test_cross_pipeline_smoke.py for integration coverage
     └── fixtures/             # Tiny synthetic data files used by tests (NOT a Python package — no __init__.py)
 ```
 
@@ -109,3 +127,18 @@ All `data/processed/` outputs MUST be **Parquet** (`pyarrow` engine, `compressio
 - Read with `pd.read_parquet(path)`; no dtype hints required.
 
 The raw `data/raw/` inputs may be in any vendor-supplied format (CSV for BBBP, EDF/FIF for EEG, NIfTI for MRI).
+
+## 7. Experiment Tracking
+
+Every `run_pipeline()` invocation logs to MLflow via `src.core.tracking.track_pipeline_run`:
+
+- **Experiment names** match the pipeline module: `bbb_pipeline`, `eeg_pipeline`, `mri_pipeline`.
+- **Params**: input/output paths and pipeline hyperparameters (e.g. BBB `n_bits` / `radius`, EEG `epoch_duration_s` / `random_state`, MRI `intensity_threshold` / `n_roi_axes`).
+- **Metrics**: row counts (`rows_in`, `rows_out`, `rows_dropped` — or modality equivalent like `subjects_in/out/dropped`) and `duration_sec`.
+- **Artifact**: the produced Parquet at `data/processed/<modality>_features.parquet`.
+
+The tracking URI is read from `MLFLOW_TRACKING_URI` (defaults to `./mlruns/` when unset).
+
+**Live-demo lifeline**: set `NEUROBRIDGE_DISABLE_MLFLOW=1` to skip tracking entirely — the helper yields `None` and emits no MLflow calls. Use this when the tracking server is unreachable (offline demo, network outage, or CI without an MLflow service). Pipelines complete normally; only the run metadata is lost.
+
+The repo-wide `conftest.py` autouse fixture pins `MLFLOW_TRACKING_URI` to a tmp directory for the test session, so the production `mlruns/` directory is never written by the test suite. Tests that interact with MLflow (in `tests/core/test_tracking.py` and the per-pipeline `Test<Modality>PipelineMLflow` classes) all share this isolated store.
