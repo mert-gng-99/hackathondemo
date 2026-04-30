@@ -31,12 +31,15 @@ RUN pip install -r requirements.txt
 # --- project source ---
 COPY src/ ./src/
 COPY tests/fixtures/ ./tests/fixtures/
-COPY data/raw/ ./data/raw/
 COPY supervisord.conf ./supervisord.conf
 
-# --- build BBB model artifact at image-build time ---
-# This makes the first /predict/bbb call instant on cold start.
-RUN python -m src.models.bbb_model
+# --- seed raw data from fixtures, run pipeline, train model at image-build time ---
+# data/raw/bbbp.csv is gitignored locally; we seed it from the test fixture so
+# the deploy is self-contained. First call to /predict/bbb is then instant.
+RUN mkdir -p data/raw data/processed && \
+    cp tests/fixtures/bbbp_sample.csv data/raw/bbbp.csv && \
+    python -m src.pipelines.bbb_pipeline && \
+    python -m src.models.bbb_model
 
 # --- HF Spaces convention ---
 EXPOSE 7860
