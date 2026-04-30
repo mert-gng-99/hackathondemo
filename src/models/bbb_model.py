@@ -125,3 +125,83 @@ def predict_with_proba(
         "label": label,
         "confidence": float(proba[label_idx]),
     }
+
+
+def explain_prediction(
+    model: RandomForestClassifier,
+    smiles: str,
+    top_k: int = 5,
+    n_bits: int = 2048,
+    radius: int = 2,
+) -> list[dict[str, object]]:
+    """Return the top-`top_k` feature attributions (SHAP values) for `smiles`.
+
+    Uses `shap.TreeExplainer` (exact for tree ensembles, no sampling). The
+    explanation is for the *predicted* class — i.e. SHAP values that pushed
+    the model toward whichever label was returned by `predict_with_proba`.
+
+    Reads fingerprint column names from `model._neurobridge_fp_cols` (set by
+    `train()`). Falls back to `fp_<index>` if the attribute is missing — useful
+    for models loaded from a joblib without the project-owned attribute.
+
+    Args:
+        model: Fitted classifier from `train()` or `load()`.
+        smiles: A SMILES string (validated via `is_valid_smiles`).
+        top_k: How many top features to return. Default 5 — matches the
+            jury-demo budget (more bars = noisier waterfall chart).
+        n_bits / radius: Must match training-time fingerprint settings.
+
+    Returns:
+        A list of `{"feature": "fp_<bit_idx>", "shap_value": float}` dicts,
+        sorted by `abs(shap_value)` descending.
+
+    Raises:
+        ValueError: if `smiles` cannot be parsed by RDKit.
+    """
+    import shap  # local import — heavy module, only loaded when needed
+
+    if not is_valid_smiles(smiles):
+        raise ValueError(f"invalid SMILES: {smiles!r}")
+    fp = compute_morgan_fingerprint(smiles, n_bits=n_bits, radius=radius)
+    X = fp.reshape(1, -1)
+
+    explainer = shap.TreeExplainer(model)
+    # uint8 fingerprints cause benign additivity violations in SHAP's
+    # reconstruction (base + sum != model output within tolerance); the
+    # default check produces false-positive errors on tree ensembles
+    # over quantized inputs, so we skip it.
+    shap_values = explainer.shap_values(X, check_additivity=False)
+    # `shap_values` shape varies by sklearn / shap versions:
+    #   - older: list of (1, n_features) arrays, one per class
+    #   - newer: ndarray of shape (1, n_features, n_classes) for binary RF
+    #   - or (1, n_features) when output already condensed
+    if isinstance(shap_values, list):
+        proba = model.predict_proba(X)[0]
+        label_idx = int(np.argmax(proba))
+        per_feature = shap_values[label_idx][0]
+    else:
+        arr = np.asarray(shap_values)
+        if arr.ndim == 3:
+            # (1, n_features, n_classes)
+            proba = model.predict_proba(X)[0]
+            label_idx = int(np.argmax(proba))
+            per_feature = arr[0, :, label_idx]
+        else:
+            # (1, n_features)
+            per_feature = arr[0]
+
+    fp_cols = (
+        list(model._neurobridge_fp_cols)
+        if hasattr(model, "_neurobridge_fp_cols")
+        else [f"fp_{i}" for i in range(len(per_feature))]
+    )
+
+    pairs = sorted(
+        zip(fp_cols, per_feature, strict=True),
+        key=lambda p: abs(p[1]),
+        reverse=True,
+    )
+    return [
+        {"feature": str(name), "shap_value": float(value)}
+        for name, value in pairs[:top_k]
+    ]

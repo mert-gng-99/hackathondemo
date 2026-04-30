@@ -89,3 +89,41 @@ class TestPredictWithProba:
         raw_proba = model.predict_proba(fp)[0]
         result = bbb_model.predict_with_proba(model, "CCO")
         assert abs(result["confidence"] - float(max(raw_proba))) < 1e-9
+
+
+class TestExplainPrediction:
+    def test_returns_top_k_features(self, trained_model_and_features):
+        model, _ = trained_model_and_features
+        attributions = bbb_model.explain_prediction(model, "CCO", top_k=5)
+        assert len(attributions) == 5
+        for a in attributions:
+            assert "feature" in a
+            assert "shap_value" in a
+            assert isinstance(a["shap_value"], float)
+
+    def test_features_sorted_by_absolute_shap_value_descending(
+        self, trained_model_and_features,
+    ):
+        model, _ = trained_model_and_features
+        attributions = bbb_model.explain_prediction(model, "CCO", top_k=10)
+        abs_vals = [abs(a["shap_value"]) for a in attributions]
+        assert abs_vals == sorted(abs_vals, reverse=True)
+
+    def test_features_named_fp_INDEX(self, trained_model_and_features):
+        model, _ = trained_model_and_features
+        attributions = bbb_model.explain_prediction(model, "CCO", top_k=3)
+        for a in attributions:
+            assert a["feature"].startswith("fp_")
+            int(a["feature"].split("_")[1])  # parses cleanly
+
+    def test_raises_on_invalid_smiles(self, trained_model_and_features):
+        model, _ = trained_model_and_features
+        with pytest.raises(ValueError):
+            bbb_model.explain_prediction(model, "still_not_a_smiles", top_k=5)
+
+    def test_deterministic_output(self, trained_model_and_features):
+        """AGENTS.md §4 rule 3: identical input → identical SHAP attributions."""
+        model, _ = trained_model_and_features
+        r1 = bbb_model.explain_prediction(model, "CCO", top_k=5)
+        r2 = bbb_model.explain_prediction(model, "CCO", top_k=5)
+        assert r1 == r2
