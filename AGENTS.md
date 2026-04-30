@@ -231,3 +231,48 @@ behavior:
 The `POST /explain/bbb` endpoint mirrors this contract. Pydantic
 enforces a non-empty `top_features` list (422 on empty); every other
 failure mode degrades to template + WARNING log + `source="template"`.
+
+## 12. Multi-Modal Explainer (Day 8)
+
+`src/llm/explainer.py` exposes `explain(payload, modality)` where
+`modality ∈ {"bbb", "eeg", "mri"}`. Each modality has its own
+deterministic template (`_template_explain_bbb / _eeg / _mri`) and
+its own LLM prompt header. Unknown modality strings degrade to the
+BBB template with a warning log; the function never raises. The
+hybrid OpenRouter fallback contract from §11 applies uniformly.
+
+The API exposes three matching endpoints — `POST /explain/{bbb,eeg,mri}` —
+each on the `explain_router` (`/explain` prefix). Streamlit surfaces
+the BBB version in the AI Assistant tab and the EEG/MRI versions as
+inline expanders inside their respective pipeline tabs.
+
+## 13. Experiments Surface (Day 8)
+
+`GET /experiments/runs` returns up to 50 most recent MLflow runs
+across the bbb/eeg/mri experiments, flattened into a list of
+`MLflowRunSummary` (run_id, experiment_name, start_time, status,
+metrics, params). `POST /experiments/diff {run_id_a, run_id_b}`
+returns a side-by-side metric+param diff (`RunDiffRow`).
+
+When `NEUROBRIDGE_DISABLE_MLFLOW=1`, both endpoints return empty
+responses without raising — required for the HF Spaces deployment
+where there is no writable mlruns/ tree. Unknown run ids → 404.
+
+The Streamlit "Experiments" tab is the user-facing surface. Cached
+in session state with an explicit Refresh button.
+
+## 14. Deploy Surface (Day 8)
+
+`Dockerfile.hf` is the Hugging Face Spaces image. Single container,
+two processes (FastAPI :8000 + Streamlit :7860) launched via
+`supervisord.conf`. Build-time `RUN python -m src.models.bbb_model`
+bakes the model artifact into the image so the first `/predict/bbb`
+call is instant on cold start.
+
+Default environment: `DEPLOY_ENV=hf_spaces`,
+`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`.
+Operators can opt back into LLM by setting `OPENROUTER_API_KEY` in
+the HF Space's Secrets panel and unsetting the disable flag.
+
+The README's YAML front-matter declares the Space metadata
+(SDK=docker, port=7860, app_file=src/frontend/app.py).

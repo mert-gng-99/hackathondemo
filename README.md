@@ -38,6 +38,7 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 | 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped — 158 tests green |
 | 6 | Final Polish & Demo Features (Edge cases + Calibration + ComBat viz) | Calibration metadata + edge-case probes + `POST /pipeline/mri/diagnostics` | Shipped — 165 tests green |
 | 7 | Final 5% (Drift, Traceability & Agents) | Per-worker drift z-score + MLflow provenance badge + `POST /explain/bbb` (LLM + template fallback) + AI Assistant tab | Shipped — 175 tests green |
+| Day 8 — The Grand Finale (Multi-Modal Agents, Track 5 & Public Deploy) | Shipped — 184 tests green |
 
 ## Quick Start
 
@@ -220,6 +221,9 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Day-7 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-05-day7-drift-traceability-agents.md`](docs/superpowers/plans/2026-05-05-day7-drift-traceability-agents.md)
 - **New surface:** `POST /explain/bbb` — natural-language rationale (LLM + deterministic fallback)
 - **New surface:** `drift_z` / `rolling_n` / `provenance` fields in `POST /predict/bbb` response
+- **Day-8 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-06-day8-grand-finale.md`](docs/superpowers/plans/2026-05-06-day8-grand-finale.md)
+- **New surfaces:** `POST /explain/eeg`, `POST /explain/mri`, `GET /experiments/runs`, `POST /experiments/diff`
+- **New deploy artifacts:** `Dockerfile.hf`, `supervisord.conf`
 
 ## Day 7 — Demo Recipe
 
