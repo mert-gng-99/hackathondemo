@@ -127,3 +127,37 @@ class TestExplainPrediction:
         r1 = bbb_model.explain_prediction(model, "CCO", top_k=5)
         r2 = bbb_model.explain_prediction(model, "CCO", top_k=5)
         assert r1 == r2
+
+
+class TestCalibrationMetadata:
+    def test_train_attaches_calibration_attribute(self, trained_model_and_features):
+        model, _ = trained_model_and_features
+        assert hasattr(model, "_neurobridge_calibration")
+        bins = model._neurobridge_calibration
+        assert isinstance(bins, list)
+        # Always at least one bin (the lowest-threshold one)
+        assert len(bins) >= 1
+        for b in bins:
+            assert "threshold" in b
+            assert "precision" in b
+            assert "support" in b
+            assert 0.0 <= b["threshold"] <= 1.0
+            assert 0.0 <= b["precision"] <= 1.0
+            assert b["support"] >= 0
+
+    def test_calibration_thresholds_are_sorted_ascending(
+        self, trained_model_and_features,
+    ):
+        model, _ = trained_model_and_features
+        thresholds = [b["threshold"] for b in model._neurobridge_calibration]
+        assert thresholds == sorted(thresholds)
+
+    def test_calibration_survives_save_load_roundtrip(
+        self, trained_model_and_features, tmp_path: Path,
+    ):
+        model, _ = trained_model_and_features
+        artifact = tmp_path / "calibrated.joblib"
+        bbb_model.save(model, artifact)
+        reloaded = bbb_model.load(artifact)
+        assert hasattr(reloaded, "_neurobridge_calibration")
+        assert reloaded._neurobridge_calibration == model._neurobridge_calibration

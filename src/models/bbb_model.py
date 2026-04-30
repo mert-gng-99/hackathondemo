@@ -15,6 +15,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
 from src.core.logger import get_logger
 from src.pipelines.bbb_pipeline import (
@@ -45,6 +46,44 @@ def _split_features_and_label(
     return X, y, fp_cols
 
 
+_CALIBRATION_THRESHOLDS: tuple[float, ...] = (0.50, 0.60, 0.70, 0.75, 0.80, 0.90)
+
+
+def _compute_calibration_bins(
+    model: RandomForestClassifier,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+) -> list[dict[str, float]]:
+    """Compute precision-at-confidence-threshold bins on a held-out test set.
+
+    For each threshold T in `_CALIBRATION_THRESHOLDS`, picks the predictions
+    whose max class probability >= T, computes precision and support, and
+    returns one bin per threshold. Bins with zero support are still emitted
+    (precision = 0.0, support = 0) so the API can always find a match.
+    """
+    if len(y_test) == 0:
+        return [
+            {"threshold": float(t), "precision": 0.0, "support": 0}
+            for t in _CALIBRATION_THRESHOLDS
+        ]
+    proba = model.predict_proba(X_test)
+    pred = model.predict(X_test)
+    confidence = proba.max(axis=1)
+    correct = (pred == y_test).astype(int)
+    bins: list[dict[str, float]] = []
+    for t in _CALIBRATION_THRESHOLDS:
+        mask = confidence >= t
+        support = int(mask.sum())
+        if support == 0:
+            precision = 0.0
+        else:
+            precision = float(correct[mask].mean())
+        bins.append({
+            "threshold": float(t), "precision": precision, "support": support,
+        })
+    return bins
+
+
 def train(
     df: pd.DataFrame,
     label_col: str = "p_np",
@@ -65,20 +104,41 @@ def train(
         downstream callers can map SHAP values back to fp_<bit> indices.
     """
     X, y, fp_cols = _split_features_and_label(df, label_col)
+    # Stratified 80/20 split for honest calibration metrics. Falls back to
+    # train-on-all if the dataset is too tiny for a stratified split (test
+    # fixtures with 3-4 rows hit this branch).
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=random_state, stratify=y,
+        )
+    except ValueError as e:
+        logger.warning(
+            "Stratified split failed (%s); training on full data; "
+            "calibration bins will be zero-support.",
+            e,
+        )
+        X_train, X_test = X, np.empty((0, X.shape[1]))
+        y_train, y_test = y, np.empty((0,))
+
     model = RandomForestClassifier(
         n_estimators=n_estimators,
         random_state=random_state,
         n_jobs=1,
     )
-    model.fit(X, y)
+    model.fit(X_train, y_train)
     # Stash the column names under a project-owned attribute so SHAP (Task 2)
     # can map values back to fp_<bit> indices. Sklearn's own feature_names_in_
     # is only set automatically when fit receives a DataFrame; setting it
     # manually fires UserWarning on every predict call.
     model._neurobridge_fp_cols = list(fp_cols)
+    model._neurobridge_calibration = _compute_calibration_bins(
+        model, X_test, y_test,
+    )
     logger.info(
-        "Trained BBB classifier: n=%d, n_features=%d, classes=%s",
+        "Trained BBB classifier: n=%d, n_features=%d, classes=%s, "
+        "calibration_bins=%d",
         len(y), X.shape[1], model.classes_.tolist(),
+        len(model._neurobridge_calibration),
     )
     return model
 
