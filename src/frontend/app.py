@@ -297,22 +297,42 @@ def _render_sidebar(api_ok: bool, api_status: str) -> None:
 def _render_bbb_tab() -> None:
     _render_section(
         "MOLECULE — BBBP",
-        "Blood-Brain-Barrier permeability",
-        "Reads SMILES strings, validates with RDKit, and emits 2,048-bit "
-        "Morgan circular fingerprints (ECFP4-equivalent) ready for any "
-        "scikit-learn classifier.",
+        "Blood-Brain-Barrier permeability decision",
+        "Enter a SMILES string. The system computes a 2,048-bit Morgan "
+        "fingerprint, runs it through a trained Random Forest classifier, "
+        "and returns the predicted permeability label, the model's "
+        "self-rated confidence, and the top SHAP feature attributions "
+        "explaining the decision.",
     )
-    bbb_in = st.text_input("Input CSV path", "data/raw/bbbp.csv", key="bbb_in")
-    bbb_out = st.text_input("Output Parquet path", "data/processed/bbbp_features.parquet", key="bbb_out")
-    if st.button("Run BBB pipeline", type="primary", key="bbb_run"):
-        with st.spinner("Computing fingerprints…"):
+
+    smiles = st.text_input(
+        "SMILES string",
+        value="CCO",
+        key="bbb_smiles",
+        help="Examples: CCO (ethanol, BBB+), CC(=O)Nc1ccc(O)cc1 (paracetamol)",
+    )
+    top_k = st.slider(
+        "SHAP features to display", min_value=3, max_value=10, value=5, key="bbb_topk",
+    )
+
+    if st.button("Predict BBB permeability", type="primary", key="bbb_predict"):
+        with st.spinner("Computing fingerprint, predicting, and explaining…"):
             try:
-                _render_result(_post("/pipeline/bbb", {
-                    "input_path": bbb_in, "output_path": bbb_out,
-                }))
-                st.toast("BBB pipeline complete", icon="✅")
+                result = _post("/predict/bbb", {"smiles": smiles, "top_k": top_k})
+                _render_prediction_card(result)
+                st.toast("Prediction complete", icon="✅")
             except httpx.HTTPStatusError as e:
-                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+                if e.response.status_code == 503:
+                    st.error(
+                        "Model artifact not loaded yet. Run "
+                        "`python -m src.models.bbb_model` to train it, "
+                        "then retry."
+                    )
+                else:
+                    st.error(
+                        f"Prediction failed (HTTP {e.response.status_code}): "
+                        f"{e.response.text}"
+                    )
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
 
@@ -364,6 +384,62 @@ def _render_mri_tab() -> None:
                 st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+
+
+def _render_prediction_card(result: dict) -> None:
+    """Render a B2B-styled decision card: label badge + confidence + SHAP bars."""
+    label_text = _html.escape(str(result["label_text"]))
+    badge_color = "#166534" if result["label"] == 1 else "#991B1B"
+    badge_bg    = "#DCFCE7" if result["label"] == 1 else "#FEE2E2"
+    confidence_pct = result["confidence"] * 100
+
+    st.markdown(
+        f"""
+        <div style='background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;
+                    padding:1.5rem;margin:1rem 0;box-shadow:0 1px 2px rgba(15,23,42,0.04);'>
+            <p style='font-size:0.72rem;font-weight:700;color:#64748B;
+                      letter-spacing:0.08em;text-transform:uppercase;margin:0;'>Prediction</p>
+            <div style='display:flex;align-items:center;gap:0.75rem;margin-top:0.4rem;'>
+                <span style='background:{badge_bg};color:{badge_color};
+                             padding:0.4rem 0.9rem;border-radius:999px;
+                             font-size:1rem;font-weight:700;letter-spacing:0.01em;'>
+                    {label_text.upper()}
+                </span>
+                <span style='color:#475569;font-size:0.95rem;'>
+                    Model confidence: <strong style='color:#0F172A;'>{confidence_pct:.1f}%</strong>
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Confidence bar
+    st.markdown(
+        "<p style='font-size:0.72rem;font-weight:700;color:#64748B;"
+        "letter-spacing:0.08em;text-transform:uppercase;margin:1rem 0 0.4rem 0;'>"
+        "Confidence</p>",
+        unsafe_allow_html=True,
+    )
+    st.progress(float(result["confidence"]))
+
+    # SHAP attributions chart
+    n_features = len(result["top_features"])
+    st.markdown(
+        f"<p style='font-size:0.72rem;font-weight:700;color:#64748B;"
+        f"letter-spacing:0.08em;text-transform:uppercase;margin:1.5rem 0 0.4rem 0;'>"
+        f"Top {n_features} SHAP attributions</p>",
+        unsafe_allow_html=True,
+    )
+    import pandas as pd
+    shap_df = pd.DataFrame(result["top_features"]).set_index("feature")
+    st.bar_chart(shap_df, height=240, color="#0369A1")
+
+    st.caption(
+        "Positive SHAP values pushed the model toward the predicted class; "
+        "negative values pushed it away. Feature names are 2,048-bit Morgan "
+        "fingerprint indices (`fp_<bit>`)."
+    )
 
 
 def main() -> None:
