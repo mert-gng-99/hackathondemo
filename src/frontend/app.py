@@ -639,6 +639,92 @@ def _render_combat_diagnostics(result: dict) -> None:
     )
 
 
+def _render_ai_assistant_tab() -> None:
+    """Day-7 T3C: chat-style explainer for the most recent BBB prediction."""
+    _render_section(
+        "AI Assistant",
+        "Natural-language rationale (LLM or deterministic template)",
+        "Pulls the most recent BBB prediction from this session and asks "
+        "the explainer to justify it. Falls back to a deterministic, "
+        "auditable template when no LLM is configured."
+    )
+
+    last = st.session_state.get("last_bbb_prediction")
+    if last is None:
+        st.info(
+            "Run a BBB prediction first (BBB tab → Predict button), "
+            "then come back here to ask the assistant about it."
+        )
+        return
+
+    # Snapshot card so the user knows which prediction is being explained
+    st.caption(
+        f"Latest prediction: **{last['label_text']}** "
+        f"({float(last['confidence']) * 100:.0f}% confident)  ·  "
+        f"Top SHAP: {', '.join(f['feature'] for f in last.get('top_features', [])[:3])}"
+    )
+
+    PRESETS = [
+        "Why was this molecule predicted as permeable?",
+        "Which features pushed the verdict the most?",
+        "Is this prediction trustworthy given the drift signal?",
+    ]
+    preset = st.selectbox("Preset question", options=PRESETS, key="ai_preset")
+    custom = st.text_input(
+        "Or type your own question (optional)",
+        value="",
+        key="ai_custom",
+        help="Custom questions only affect the LLM path; the template gives a generic SHAP-driven rationale either way.",
+    )
+    question = custom.strip() or preset
+
+    if st.button("Ask the AI Assistant", type="primary", key="ai_ask"):
+        with st.spinner("Composing rationale…"):
+            try:
+                body = {
+                    "smiles": last.get("smiles", ""),
+                    "label": last["label"],
+                    "label_text": last["label_text"],
+                    "confidence": last["confidence"],
+                    "top_features": last.get("top_features", []),
+                    "calibration": last.get("calibration"),
+                    "drift_z": last.get("drift_z"),
+                    "user_question": question,
+                }
+                # The /predict/bbb response payload doesn't include the
+                # user-supplied SMILES (only label/confidence/etc.), so
+                # pull it from the input widget for paper-trail accuracy.
+                # Streamlit text inputs persist via st.session_state.
+                if not body["smiles"]:
+                    body["smiles"] = st.session_state.get("bbb_smiles", "")
+                resp = _post("/explain/bbb", body)
+            except httpx.HTTPStatusError as e:
+                st.error(
+                    f"Explainer failed (HTTP {e.response.status_code}): "
+                    f"{e.response.text}"
+                )
+                return
+            except httpx.RequestError as e:
+                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+                return
+
+        history = st.session_state.setdefault("explain_history", [])
+        history.insert(0, (question, resp))
+
+    # Render history (most recent first)
+    history = st.session_state.get("explain_history", [])
+    if history:
+        st.markdown("### Conversation")
+        for q, r in history[:10]:  # cap at 10 most recent
+            with st.container():
+                st.markdown(f"**Q:** {q}")
+                st.markdown(f"**A:** {r['rationale']}")
+                source = r.get("source", "?")
+                model = r.get("model") or "—"
+                st.caption(f"Source: `{source}`  ·  Model: `{model}`")
+                st.divider()
+
+
 def main() -> None:
     """Streamlit entrypoint. Idempotent — Streamlit re-runs on every interaction."""
     st.set_page_config(
@@ -660,10 +746,11 @@ def main() -> None:
             "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
         )
 
-    bbb_tab, eeg_tab, mri_tab = st.tabs([
+    bbb_tab, eeg_tab, mri_tab, assistant_tab = st.tabs([
         "Molecule (BBB)",
         "Signal (EEG)",
         "Image (MRI)",
+        "AI Assistant",
     ])
 
     with bbb_tab:
@@ -672,6 +759,8 @@ def main() -> None:
         _render_eeg_tab()
     with mri_tab:
         _render_mri_tab()
+    with assistant_tab:
+        _render_ai_assistant_tab()
 
 
 if __name__ == "__main__":
