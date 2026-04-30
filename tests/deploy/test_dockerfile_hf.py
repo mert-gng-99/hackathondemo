@@ -88,3 +88,17 @@ class TestDockerfileHF:
             "manually on the Space, do not bake it into the image. "
             f"Offending lines: {env_lines}"
         )
+
+    def test_dockerfile_byte_identical_to_hf_alias(self):
+        """`Dockerfile` (HF auto-discovers this name) and `Dockerfile.hf`
+        (canonical/readable name) must stay byte-identical. Drift between
+        the two means HF builds a different image than the one the test
+        suite verifies — silent deploy regression. Catch it in CI."""
+        canonical = REPO_ROOT / "Dockerfile.hf"
+        alias = REPO_ROOT / "Dockerfile"
+        assert canonical.exists(), f"missing {canonical}"
+        assert alias.exists(), f"missing {alias}"
+        assert canonical.read_bytes() == alias.read_bytes(), (
+            "Dockerfile and Dockerfile.hf have diverged. Re-sync them: "
+            "`cp Dockerfile.hf Dockerfile` (or vice versa)."
+        )
