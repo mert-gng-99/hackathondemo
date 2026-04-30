@@ -14,6 +14,7 @@ and Docker shipping.
 | 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped — 67 tests green |
 | 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped — 106 tests green |
 | 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped — 142 tests green |
+| 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped — 158 tests green |
 
 ## Quick Start
 
@@ -58,6 +59,21 @@ Result lives at `data/processed/mri_features.parquet` (48 ROI features per subje
 > **Real BBBP data:** not bundled (gitignored). Download from
 > [Kaggle](https://www.kaggle.com/datasets/priyanagda/bbbp) or
 > [MoleculeNet](https://moleculenet.org/datasets-1); place as `data/raw/bbbp.csv`.
+
+### Train the downstream BBB model (one-time)
+
+```bash
+python -m src.pipelines.bbb_pipeline   # produces data/processed/bbbp_features.parquet
+python -m src.models.bbb_model          # produces data/processed/bbb_model.joblib
+```
+
+Then `POST /predict/bbb` (and the Streamlit BBB tab) become live. Try:
+
+```bash
+curl -s -X POST http://localhost:8000/predict/bbb \
+  -H 'Content-Type: application/json' \
+  -d '{"smiles": "CCO", "top_k": 5}' | python3 -m json.tool
+```
 
 ### Run the full stack with Docker
 
@@ -154,6 +170,7 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Day 2 (shipped):** `eeg_pipeline.py` — bandpass + MNE ICA artifact removal + PSD + statistical features → Parquet.
 - **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet (48 features, 106 tests green).
 - **Day 4 (shipped):** FastAPI surface in `src/api/` (POST `/pipeline/{bbb,eeg,mri}` + `/health`), MLflow experiment tracking via `src.core.tracking` (see AGENTS.md §7), Streamlit dashboard at `src/frontend/app.py`, and Docker / `docker-compose.yml` for the api + MLflow stack — 142 tests green.
+- **Day 5 (shipped):** Decision layer in `src/models/bbb_model.py` — RandomForest BBB classifier on Morgan fingerprints, SHAP top-k explanations, `POST /predict/bbb` endpoint, interactive Streamlit BBB tab with SMILES input + decision card + SHAP bar chart, and trainer CLI (`python -m src.models.bbb_model`). See AGENTS.md §8 — 158 tests green.
 
 ## Where to Look
 
@@ -171,3 +188,5 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Streamlit dashboard:** [`src/frontend/app.py`](src/frontend/app.py)
 - **Container stack:** [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml)
 - **Day-4 tests:** [`tests/api/`](tests/api/), [`tests/frontend/`](tests/frontend/), [`tests/pipelines/test_cross_pipeline_smoke.py`](tests/pipelines/test_cross_pipeline_smoke.py)
+- **Day-5 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md`](docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md)
+- **BBB downstream model (classifier + SHAP explainer + trainer CLI):** [`src/models/bbb_model.py`](src/models/bbb_model.py) + [`tests/models/test_bbb_model.py`](tests/models/test_bbb_model.py) (12 tests)

@@ -50,6 +50,8 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 │   │   ├── storage.py        # Parquet read/write helpers (snappy, single-threaded, deterministic)
 │   │   └── tracking.py       # MLflow `track_pipeline_run` context manager (see §7)
 │   ├── pipelines/            # One file per modality. Pure functions + a `run_pipeline()` entry.
+│   ├── models/               # Downstream decision-layer models (consume processed features)
+│   │   └── bbb_model.py      # BBB-permeability classifier + SHAP explainer + trainer CLI
 │   └── frontend/
 │       └── app.py            # Streamlit dashboard (3 tabs, one per modality)
 └── tests/
@@ -142,3 +144,31 @@ The tracking URI is read from `MLFLOW_TRACKING_URI` (defaults to `./mlruns/` whe
 **Live-demo lifeline**: set `NEUROBRIDGE_DISABLE_MLFLOW=1` to skip tracking entirely — the helper yields `None` and emits no MLflow calls. Use this when the tracking server is unreachable (offline demo, network outage, or CI without an MLflow service). Pipelines complete normally; only the run metadata is lost.
 
 The repo-wide `conftest.py` autouse fixture pins `MLFLOW_TRACKING_URI` to a tmp directory for the test session, so the production `mlruns/` directory is never written by the test suite. Tests that interact with MLflow (in `tests/core/test_tracking.py` and the per-pipeline `Test<Modality>PipelineMLflow` classes) all share this isolated store.
+
+## 8. Decision Layer (Downstream Models)
+
+Pipelines produce features (`data/processed/<modality>_features.parquet`).
+Downstream models live in `src/models/` and consume those features:
+
+| Model | File | Output | Endpoint |
+|---|---|---|---|
+| BBB permeability | `src/models/bbb_model.py` | `data/processed/bbb_model.joblib` | `POST /predict/bbb` |
+
+Each downstream model module exposes a uniform surface:
+- `train(df, label_col, ...)` → fitted classifier
+- `save(model, path)` / `load(path)` → joblib artifact I/O
+- `predict_with_proba(model, smiles)` → `{label, confidence}` (confidence is the max-class probability)
+- `explain_prediction(model, smiles, top_k)` → SHAP top-k attributions sorted by `|shap_value|` descending
+
+The API loads the joblib artifact at request time. If the artifact is
+missing, the endpoint returns **HTTP 503** with a remediation hint pointing
+at the trainer CLI (`python -m src.models.<name>`). This keeps the API
+process startup fast and lets operators retrain without redeploying — the
+Day-5 analog of Day-4's `NEUROBRIDGE_DISABLE_MLFLOW` lifeline.
+
+**Determinism**: all classifiers are seeded (`random_state=42` default),
+`n_jobs=1` (no tree-parallelism races). Re-running the trainer on the same
+Parquet produces identical predictions.
+
+**Override `BBB_MODEL_PATH`** env var to point the API at a non-default
+artifact location (used by tests for tmp_path isolation).

@@ -205,3 +205,29 @@ def explain_prediction(
         {"feature": str(name), "shap_value": float(value)}
         for name, value in pairs[:top_k]
     ]
+
+
+DEFAULT_FEATURES_PATH = Path("data/processed/bbbp_features.parquet")
+DEFAULT_MODEL_PATH = Path("data/processed/bbb_model.joblib")
+
+
+def main() -> None:
+    """Train and persist the production BBB model from the Day-4 features Parquet.
+
+    Reads from `DEFAULT_FEATURES_PATH`, trains with default hyperparameters,
+    and writes the artifact to `DEFAULT_MODEL_PATH`. Re-runs are idempotent
+    (same random_state).
+    """
+    if not DEFAULT_FEATURES_PATH.exists():
+        raise FileNotFoundError(
+            f"Features Parquet not found at {DEFAULT_FEATURES_PATH}. "
+            f"Run `python -m src.pipelines.bbb_pipeline` first."
+        )
+    df = pd.read_parquet(DEFAULT_FEATURES_PATH)
+    model = train(df, label_col="p_np")
+    save(model, DEFAULT_MODEL_PATH)
+    logger.info("BBB model artifact ready at %s", DEFAULT_MODEL_PATH)
+
+
+if __name__ == "__main__":
+    main()
