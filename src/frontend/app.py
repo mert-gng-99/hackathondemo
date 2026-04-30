@@ -1197,7 +1197,15 @@ def _render_eeg_tab() -> None:
         "ICA decomposition, and extracts per-band PSD + statistical features "
         "across fixed-duration epochs.",
     )
-    eeg_in = st.text_input("Input FIF/EDF path", "data/raw/eeg.fif", key="eeg_in")
+    eeg_in = st.text_input(
+        "Input FIF/EDF path",
+        "tests/fixtures/eeg_sample.fif",
+        key="eeg_in",
+        help=(
+            "Defaults to the bundled EEG fixture so the demo runs out of "
+            "the box. Replace with your own .fif/.edf path on a real run."
+        ),
+    )
     eeg_out = st.text_input(
         "Output Parquet path",
         "data/processed/eeg_features.parquet",
