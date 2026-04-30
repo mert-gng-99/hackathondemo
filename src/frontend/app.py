@@ -110,6 +110,21 @@ def _build_css(theme: str) -> str:
     --ng-radius-xl: 24px;
     --ng-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --ng-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    /* Motion tokens — Apple HIG fluid-physics + Material standard mix */
+    --ng-ease-out:      cubic-bezier(0.16, 1, 0.3, 1);          /* expo-out, hero entrances */
+    --ng-ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);      /* gentle overshoot, verdict reveal */
+    --ng-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);           /* MD standard, micro-interactions */
+    --ng-ease-decel:    cubic-bezier(0, 0, 0.2, 1);             /* enter from off-screen */
+    --ng-ease-accel:    cubic-bezier(0.4, 0, 1, 1);             /* exit to off-screen */
+    --ng-dur-instant:   80ms;
+    --ng-dur-fast:      180ms;
+    --ng-dur-base:      240ms;
+    --ng-dur-slow:      360ms;
+    --ng-dur-hero:      640ms;
+}}
+
+html {{
+    scroll-behavior: smooth;
 }}
 
 /* --- Global typography + canvas ----------------------------------------- */
@@ -131,6 +146,43 @@ main .block-container {{
     max-width: 1200px;
 }}
 
+/* --- Premium motion keyframes ------------------------------------------ */
+
+@keyframes ng-fade-up {{
+    from {{ opacity: 0; transform: translate3d(0, 14px, 0); }}
+    to   {{ opacity: 1; transform: translate3d(0, 0, 0); }}
+}}
+@keyframes ng-fade-in {{
+    from {{ opacity: 0; }}
+    to   {{ opacity: 1; }}
+}}
+@keyframes ng-scale-in {{
+    from {{ opacity: 0; transform: scale(0.94); }}
+    to   {{ opacity: 1; transform: scale(1); }}
+}}
+@keyframes ng-pulse-dot {{
+    0%   {{ box-shadow: 0 0 0 0 var(--ng-success), 0 0 8px var(--ng-success); }}
+    70%  {{ box-shadow: 0 0 0 6px transparent, 0 0 8px var(--ng-success); }}
+    100% {{ box-shadow: 0 0 0 0 transparent, 0 0 8px var(--ng-success); }}
+}}
+@keyframes ng-shimmer {{
+    0%   {{ background-position: -200% 0; }}
+    100% {{ background-position: 200% 0; }}
+}}
+@keyframes ng-bar-grow {{
+    from {{ transform: scaleX(0); }}
+    to   {{ transform: scaleX(1); }}
+}}
+@keyframes ng-rise {{
+    from {{ opacity: 0; transform: translate3d(0, 6px, 0); }}
+    to   {{ opacity: 1; transform: translate3d(0, 0, 0); }}
+}}
+
+/* Page first-paint — soft fade-in over the whole canvas */
+.stApp > div {{
+    animation: ng-fade-in var(--ng-dur-base) var(--ng-ease-out) backwards;
+}}
+
 /* --- Hero / brand strip ------------------------------------------------- */
 
 .hero {{
@@ -144,7 +196,35 @@ main .block-container {{
     border: 1px solid var(--ng-border);
     box-shadow: var(--ng-shadow-md);
     overflow: hidden;
+    /* Premium entrance: subtle drop with expo-out easing (Apple-style) */
+    animation: ng-fade-up var(--ng-dur-hero) var(--ng-ease-out) backwards;
+    will-change: transform, opacity;
 }}
+
+.hero::before {{
+    /* Diffuse warm glow that never fully resolves — adds depth without noise */
+    content: "";
+    position: absolute;
+    top: -40%; right: -20%;
+    width: 60%; height: 200%;
+    background: radial-gradient(ellipse at center,
+        var(--ng-accent-soft) 0%,
+        transparent 60%);
+    pointer-events: none;
+    opacity: 0.7;
+}}
+
+.hero-eyebrow,
+.hero-title,
+.hero-tagline,
+.hero-status-row {{
+    position: relative; /* sit above ::before */
+}}
+
+.hero-eyebrow {{ animation: ng-rise var(--ng-dur-slow) var(--ng-ease-out) 80ms backwards; }}
+.hero-title    {{ animation: ng-rise var(--ng-dur-slow) var(--ng-ease-out) 140ms backwards; }}
+.hero-tagline  {{ animation: ng-rise var(--ng-dur-slow) var(--ng-ease-out) 220ms backwards; }}
+.hero-status-row {{ animation: ng-rise var(--ng-dur-slow) var(--ng-ease-out) 300ms backwards; }}
 
 .hero::after {{
     content: "";
@@ -213,16 +293,24 @@ main .block-container {{
     background: var(--ng-bg-elevated-3);
     color: var(--ng-text-secondary);
     border: 1px solid var(--ng-border);
+    transition: border-color var(--ng-dur-fast) var(--ng-ease-standard),
+                background var(--ng-dur-fast) var(--ng-ease-standard);
 }}
+.dot:hover {{ border-color: var(--ng-border-strong); }}
 
 .dot::before {{
     content: "";
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--ng-text-tertiary);
+    transition: background var(--ng-dur-base) var(--ng-ease-standard);
 }}
 
-.dot.is-ok::before    {{ background: var(--ng-success); box-shadow: 0 0 8px var(--ng-success); }}
+.dot.is-ok::before    {{
+    background: var(--ng-success);
+    /* Subtle "alive" pulse — only on healthy state, says system is breathing */
+    animation: ng-pulse-dot 2.4s var(--ng-ease-standard) infinite;
+}}
 .dot.is-warn::before  {{ background: var(--ng-warning); }}
 .dot.is-down::before  {{ background: var(--ng-danger); }}
 .dot.is-mute::before  {{ background: var(--ng-text-tertiary); }}
@@ -233,6 +321,7 @@ main .block-container {{
     margin: 2rem 0 1.5rem 0;
     padding-bottom: 1.25rem;
     border-bottom: 1px solid var(--ng-border);
+    animation: ng-rise var(--ng-dur-base) var(--ng-ease-out) backwards;
 }}
 .section-eyebrow {{
     font-family: var(--ng-font-mono);
@@ -268,6 +357,17 @@ main .block-container {{
     padding: 1.6rem 1.75rem;
     margin: 1.25rem 0;
     box-shadow: var(--ng-shadow-md);
+    /* Drop-in reveal — starts slightly below + faded, settles with expo-out */
+    animation: ng-fade-up var(--ng-dur-hero) var(--ng-ease-out) backwards;
+    transition: border-color var(--ng-dur-base) var(--ng-ease-standard),
+                box-shadow var(--ng-dur-base) var(--ng-ease-standard),
+                transform var(--ng-dur-base) var(--ng-ease-standard);
+    will-change: transform;
+}}
+.card:hover {{
+    border-color: var(--ng-border-strong);
+    box-shadow: var(--ng-shadow-lg);
+    transform: translate3d(0, -2px, 0);
 }}
 
 .provenance-strip {{
@@ -310,6 +410,8 @@ main .block-container {{
     line-height: 1;
     margin: 0;
     font-feature-settings: "tnum" on, "lnum" on;
+    /* Verdict reveal — gentle spring overshoot, the "moment of truth" */
+    animation: ng-scale-in var(--ng-dur-hero) var(--ng-ease-spring) 120ms backwards;
 }}
 .verdict-confidence {{
     font-size: 1.1rem;
@@ -338,7 +440,13 @@ main .block-container {{
     align-items: baseline;
     font-size: 0.92rem;
     line-height: 1.55;
+    /* Stagger entry — 50ms between rows, very Apple Settings */
+    animation: ng-rise var(--ng-dur-base) var(--ng-ease-out) backwards;
 }}
+.signal-row:nth-child(1) {{ animation-delay: 280ms; }}
+.signal-row:nth-child(2) {{ animation-delay: 330ms; }}
+.signal-row:nth-child(3) {{ animation-delay: 380ms; }}
+.signal-row:nth-child(4) {{ animation-delay: 430ms; }}
 .signal-key {{
     font-family: var(--ng-font-mono);
     font-size: 0.72rem;
@@ -369,15 +477,24 @@ main .block-container {{
     padding: 0.6rem 1.4rem !important;
     letter-spacing: 0.01em !important;
     font-size: 0.92rem !important;
-    transition: background 180ms ease, transform 120ms ease, box-shadow 180ms ease !important;
-    box-shadow: 0 0 0 0 var(--ng-accent-ring);
+    transition: background var(--ng-dur-fast) var(--ng-ease-standard),
+                transform var(--ng-dur-fast) var(--ng-ease-out),
+                box-shadow var(--ng-dur-fast) var(--ng-ease-standard) !important;
+    box-shadow: 0 0 0 0 var(--ng-accent-ring), var(--ng-shadow-sm);
+    will-change: transform;
 }}
 .stButton > button[kind="primary"]:hover {{
     background: var(--ng-accent-strong) !important;
-    transform: translateY(-1px);
+    transform: translate3d(0, -1px, 0);
+    box-shadow: 0 0 0 0 var(--ng-accent-ring), var(--ng-shadow-md) !important;
 }}
-.stButton > button[kind="primary"]:focus {{
-    box-shadow: 0 0 0 3px var(--ng-accent-ring) !important;
+.stButton > button[kind="primary"]:active {{
+    /* Apple-style press: brief downward scale, no layout shift */
+    transform: translate3d(0, 0, 0) scale(0.97) !important;
+    transition-duration: var(--ng-dur-instant) !important;
+}}
+.stButton > button[kind="primary"]:focus-visible {{
+    box-shadow: 0 0 0 3px var(--ng-accent-ring), var(--ng-shadow-sm) !important;
     outline: none !important;
 }}
 
@@ -389,11 +506,19 @@ main .block-container {{
     border-radius: var(--ng-radius-sm) !important;
     font-weight: 500 !important;
     padding: 0.55rem 1.2rem !important;
-    transition: border-color 180ms ease, background 180ms ease !important;
+    transition: border-color var(--ng-dur-fast) var(--ng-ease-standard),
+                background var(--ng-dur-fast) var(--ng-ease-standard),
+                transform var(--ng-dur-fast) var(--ng-ease-out) !important;
+    will-change: transform;
 }}
 .stButton > button:not([kind="primary"]):not([kind="primaryFormSubmit"]):hover {{
     background: var(--ng-bg-elevated-3) !important;
     border-color: var(--ng-accent) !important;
+    transform: translate3d(0, -1px, 0);
+}}
+.stButton > button:not([kind="primary"]):not([kind="primaryFormSubmit"]):active {{
+    transform: translate3d(0, 0, 0) scale(0.97) !important;
+    transition-duration: var(--ng-dur-instant) !important;
 }}
 
 /* Tabs — left-aligned underline indicator (Apple/Netflix tab strip) */
@@ -409,19 +534,35 @@ main .block-container {{
     padding: 0.85rem 1.4rem !important;
     border-bottom: 2px solid transparent !important;
     background: transparent !important;
-    transition: color 180ms ease, border-color 180ms ease !important;
+    transition: color var(--ng-dur-base) var(--ng-ease-standard),
+                border-color var(--ng-dur-base) var(--ng-ease-out) !important;
     letter-spacing: -0.005em;
+    position: relative;
 }}
 .stTabs [data-baseweb="tab"]:hover {{
     color: var(--ng-text-secondary) !important;
+}}
+/* The hover "ghost" underline — only visible while hovering an inactive tab */
+.stTabs [data-baseweb="tab"]:not([aria-selected="true"]):hover::after {{
+    content: "";
+    position: absolute;
+    left: 1.4rem; right: 1.4rem; bottom: -1px;
+    height: 2px;
+    background: var(--ng-text-tertiary);
+    opacity: 0.4;
+    animation: ng-fade-in var(--ng-dur-fast) var(--ng-ease-out);
 }}
 .stTabs [aria-selected="true"] {{
     color: var(--ng-accent) !important;
     border-bottom-color: var(--ng-accent) !important;
     font-weight: 600 !important;
 }}
+/* Tab content cross-fades on switch */
+.stTabs [data-baseweb="tab-panel"] {{
+    animation: ng-fade-in var(--ng-dur-base) var(--ng-ease-out) backwards;
+}}
 
-/* Inputs — flat with accent-on-focus border */
+/* Inputs — flat with accent-on-focus border + smooth ring expansion */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea {{
     background: var(--ng-bg-elevated-2) !important;
@@ -431,7 +572,13 @@ main .block-container {{
     padding: 0.7rem 0.85rem !important;
     font-family: var(--ng-font-sans) !important;
     font-size: 0.95rem !important;
-    transition: border-color 150ms ease, box-shadow 150ms ease !important;
+    transition: border-color var(--ng-dur-fast) var(--ng-ease-standard),
+                box-shadow var(--ng-dur-base) var(--ng-ease-out),
+                background var(--ng-dur-fast) var(--ng-ease-standard) !important;
+}}
+.stTextInput > div > div > input:hover,
+.stTextArea > div > div > textarea:hover {{
+    border-color: var(--ng-border-strong) !important;
 }}
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {{
@@ -457,24 +604,42 @@ main .block-container {{
     background: var(--ng-accent) !important;
 }}
 
-/* Progress bar */
+/* Progress bar — fill animates from 0 with expo-out (the "filling up" beat) */
 .stProgress > div > div > div > div {{
-    background: var(--ng-accent) !important;
+    background: linear-gradient(90deg,
+        var(--ng-accent) 0%,
+        var(--ng-accent-strong) 100%) !important;
     border-radius: 999px !important;
+    transition: width var(--ng-dur-hero) var(--ng-ease-out) !important;
+    box-shadow: 0 0 16px var(--ng-accent-ring);
 }}
 .stProgress > div > div > div {{
     background: var(--ng-bg-elevated-3) !important;
     border-radius: 999px !important;
 }}
 
-/* Metric cards (KPI strip) */
+/* Metric cards (KPI strip) — drop in with subtle stagger */
 [data-testid="stMetric"] {{
     background: var(--ng-bg-elevated) !important;
     border: 1px solid var(--ng-border) !important;
     border-radius: var(--ng-radius-md) !important;
     padding: 1.4rem 1.5rem !important;
     box-shadow: var(--ng-shadow-sm);
+    animation: ng-fade-up var(--ng-dur-slow) var(--ng-ease-out) backwards;
+    transition: border-color var(--ng-dur-base) var(--ng-ease-standard),
+                box-shadow var(--ng-dur-base) var(--ng-ease-standard),
+                transform var(--ng-dur-base) var(--ng-ease-standard);
+    will-change: transform;
 }}
+[data-testid="stMetric"]:hover {{
+    border-color: var(--ng-border-strong) !important;
+    box-shadow: var(--ng-shadow-md);
+    transform: translate3d(0, -2px, 0);
+}}
+/* Stagger when 3 metrics sit side-by-side */
+[data-testid="stHorizontalBlock"] [data-testid="stMetric"]:nth-child(1) {{ animation-delay: 80ms; }}
+[data-testid="stHorizontalBlock"] [data-testid="stMetric"]:nth-child(2) {{ animation-delay: 140ms; }}
+[data-testid="stHorizontalBlock"] [data-testid="stMetric"]:nth-child(3) {{ animation-delay: 200ms; }}
 [data-testid="stMetricLabel"] > div {{
     color: var(--ng-text-tertiary) !important;
     font-family: var(--ng-font-mono) !important;
@@ -502,13 +667,29 @@ main .block-container {{
     line-height: 1.55 !important;
 }}
 
-/* Expander */
+/* Expander — chevron rotates smoothly + body cross-fades */
 .streamlit-expanderHeader, [data-testid="stExpander"] details summary {{
     background: var(--ng-bg-elevated-2) !important;
     color: var(--ng-text-primary) !important;
     border: 1px solid var(--ng-border) !important;
     border-radius: var(--ng-radius-sm) !important;
     font-weight: 500 !important;
+    transition: background var(--ng-dur-fast) var(--ng-ease-standard),
+                border-color var(--ng-dur-fast) var(--ng-ease-standard) !important;
+    cursor: pointer;
+}}
+[data-testid="stExpander"] details summary:hover {{
+    background: var(--ng-bg-elevated-3) !important;
+    border-color: var(--ng-border-strong) !important;
+}}
+[data-testid="stExpander"] details summary svg {{
+    transition: transform var(--ng-dur-base) var(--ng-ease-out) !important;
+}}
+[data-testid="stExpander"] details[open] summary svg {{
+    transform: rotate(90deg);
+}}
+[data-testid="stExpander"] details[open] > div {{
+    animation: ng-rise var(--ng-dur-base) var(--ng-ease-out);
 }}
 [data-testid="stExpander"] {{
     border: 1px solid var(--ng-border) !important;
@@ -534,6 +715,8 @@ code, pre {{
     border-radius: var(--ng-radius-sm) !important;
     color: var(--ng-text-primary) !important;
     box-shadow: var(--ng-shadow-sm);
+    /* Slide-down + fade — alerts feel like notifications dropping in */
+    animation: ng-fade-up var(--ng-dur-slow) var(--ng-ease-out) backwards;
 }}
 [data-testid="stAlert"][data-baseweb="notification"][kind="info"] {{ border-left-color: var(--ng-accent); }}
 [data-testid="stAlert"][data-baseweb="notification"][kind="warning"] {{ border-left-color: var(--ng-warning); }}
@@ -616,12 +799,13 @@ hr, [data-testid="stDivider"] {{
     margin: 1.5rem 0 !important;
 }}
 
-/* Toast (st.toast) */
+/* Toast (st.toast) — slide in from bottom-right, expo-out */
 .stToast {{
     background: var(--ng-bg-elevated) !important;
     color: var(--ng-text-primary) !important;
     border: 1px solid var(--ng-border) !important;
     box-shadow: var(--ng-shadow-lg) !important;
+    animation: ng-fade-up var(--ng-dur-slow) var(--ng-ease-spring) backwards;
 }}
 
 /* Chart container — quiet frame */
@@ -640,11 +824,13 @@ hr, [data-testid="stDivider"] {{
     padding: 1rem;
 }}
 
-/* Reduced motion */
+/* Reduced motion — fully disable animations + cap transitions to a flash */
 @media (prefers-reduced-motion: reduce) {{
-    * {{
-        animation-duration: 0.01ms !important;
-        transition-duration: 0.01ms !important;
+    *, *::before, *::after {{
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
     }}
 }}
 
