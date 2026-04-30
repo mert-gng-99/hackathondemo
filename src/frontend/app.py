@@ -425,22 +425,31 @@ def _render_mri_tab() -> None:
         "Multi-site harmonization via ComBat",
         "Loads NIfTI volumes, masks brain tissue, computes per-ROI summary "
         "statistics, then harmonizes across acquisition sites with neuroHarmonize "
-        "to remove scanner-driven domain shift.",
+        "to remove scanner-driven domain shift. The diagnostic plot below "
+        "compares per-site feature distributions before and after harmonization."
     )
-    mri_dir = st.text_input("Input NIfTI directory", "data/raw/mri/", key="mri_dir")
-    sites_csv = st.text_input("Sites CSV", "data/raw/mri/sites.csv", key="mri_sites")
-    mri_out = st.text_input("Output Parquet path", "data/processed/mri_features.parquet", key="mri_out")
-    if st.button("Run MRI pipeline", type="primary", key="mri_run"):
-        with st.spinner("Masking, ROI extraction, and ComBat harmonization…"):
+    mri_dir = st.text_input(
+        "Input NIfTI directory", "tests/fixtures/mri_sample", key="mri_dir",
+        help="Path to a directory of .nii(.gz) files + sites.csv",
+    )
+    sites_csv = st.text_input(
+        "Sites CSV", "tests/fixtures/mri_sample/sites.csv", key="mri_sites",
+    )
+
+    if st.button("Run ComBat diagnostics", type="primary", key="mri_diag"):
+        with st.spinner("Running pre + post ComBat (×2 the work)…"):
             try:
-                _render_result(_post("/pipeline/mri", {
-                    "input_dir": mri_dir,
-                    "sites_csv": sites_csv,
-                    "output_path": mri_out,
-                }))
-                st.toast("MRI pipeline complete", icon="✅")
+                result = _post(
+                    "/pipeline/mri/diagnostics",
+                    {"input_dir": mri_dir, "sites_csv": sites_csv},
+                )
+                _render_combat_diagnostics(result)
+                st.toast("Diagnostics complete", icon="✅")
             except httpx.HTTPStatusError as e:
-                st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
+                st.error(
+                    f"Diagnostics failed (HTTP {e.response.status_code}): "
+                    f"{e.response.text}"
+                )
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
 
@@ -516,6 +525,81 @@ def _render_prediction_card(result: dict) -> None:
         "Positive SHAP values pushed the model toward the predicted class; "
         "negative values pushed it away. Feature names are 2,048-bit Morgan "
         "fingerprint indices (`fp_<bit>`)."
+    )
+
+
+def _render_combat_diagnostics(result: dict) -> None:
+    """Render the Pre/Post-ComBat KDE comparison + site-gap KPI strip."""
+    import altair as alt
+    import pandas as pd
+
+    rows = result.get("rows", [])
+    if not rows:
+        st.info(
+            "No data returned. Check that the input directory contains "
+            ".nii(.gz) files and a sites.csv with subject_id/site columns."
+        )
+        return
+
+    cols = st.columns(3)
+    cols[0].metric("Site-gap (Pre-ComBat)", f"{result['site_gap_pre']:.4f}")
+    cols[1].metric("Site-gap (Post-ComBat)", f"{result['site_gap_post']:.4f}")
+    cols[2].metric(
+        "Reduction factor",
+        f"{result['reduction_factor']:.0f}×",
+        help=(
+            "Pre-gap / Post-gap. A 100× reduction means ComBat "
+            "removed two orders of magnitude of site-driven domain shift."
+        ),
+    )
+
+    df = pd.DataFrame(rows)
+    # Pin the chart to the first feature (most recognizable for the audience).
+    feat = df["feature"].iloc[0]
+    feat_df = df[df["feature"] == feat]
+
+    # Layered KDE: x = feature_value, color = site, faceted by harmonization_state.
+    chart = (
+        alt.Chart(feat_df)
+        .transform_density(
+            density="feature_value",
+            groupby=["site", "harmonization_state"],
+            as_=["feature_value", "density"],
+        )
+        .mark_area(opacity=0.55)
+        .encode(
+            x=alt.X("feature_value:Q", title=f"{feat} (intensity)"),
+            y=alt.Y("density:Q", title="Density"),
+            color=alt.Color(
+                "site:N",
+                title="Site",
+                scale=alt.Scale(scheme="tableau10"),
+            ),
+            tooltip=[
+                alt.Tooltip("site:N"),
+                alt.Tooltip("feature_value:Q", format=".4f"),
+                alt.Tooltip("density:Q", format=".3f"),
+            ],
+        )
+        .properties(width=380, height=260)
+        .facet(
+            column=alt.Column(
+                "harmonization_state:N",
+                title=None,
+                sort=["Pre-ComBat", "Post-ComBat"],
+                header=alt.Header(labelFontSize=13, labelFontWeight="bold"),
+            )
+        )
+        .resolve_scale(x="shared", y="shared")
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    st.caption(
+        f"Per-site density of `{feat}` before and after ComBat. Each "
+        f"colored region is one acquisition site. **Convergence of the "
+        f"colored regions in the Post-ComBat panel is the visual proof "
+        f"of harmonization** — the same property the {result['reduction_factor']:.0f}× "
+        f"site-gap reduction quantifies."
     )
 
 
