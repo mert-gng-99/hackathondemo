@@ -456,6 +456,7 @@ def _render_mri_tab() -> None:
 
 def _render_prediction_card(result: dict) -> None:
     """Render a B2B-styled decision card: label badge + confidence + SHAP bars."""
+    st.session_state["last_bbb_prediction"] = result
     label_text = _html.escape(str(result["label_text"]))
     badge_color = "#166534" if result["label"] == 1 else "#991B1B"
     badge_bg    = "#DCFCE7" if result["label"] == 1 else "#FEE2E2"
@@ -508,6 +509,29 @@ def _render_prediction_card(result: dict) -> None:
                 f"📊 Test set'te ≥{threshold_pct}% güven üreten tahminlerin "
                 f"precision'ı **{precision_pct}%** (n={support})."
             )
+
+    drift_z = result.get("drift_z")
+    rolling_n = result.get("rolling_n", 0)
+    if drift_z is None and rolling_n < 10:
+        st.caption(
+            f"📈 Drift: warming up ({rolling_n}/10 predictions buffered)."
+        )
+    elif drift_z is None:
+        st.caption(
+            "📈 Drift: unavailable (model lacks train-time confidence stats)."
+        )
+    else:
+        # Sign + magnitude: |z| < 1 in-band, 1–2 mild, >=2 significant.
+        if abs(drift_z) < 1.0:
+            tag = "within expected range"
+        elif abs(drift_z) < 2.0:
+            tag = "mild distribution shift"
+        else:
+            tag = "significant shift — retrain recommended"
+        st.caption(
+            f"📈 Drift: trailing-{rolling_n} confidence median is "
+            f"**{drift_z:+.2f}σ** from train-time distribution ({tag})."
+        )
 
     # SHAP attributions chart
     n_features = len(result["top_features"])
