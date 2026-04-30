@@ -161,3 +161,29 @@ class TestCalibrationMetadata:
         reloaded = bbb_model.load(artifact)
         assert hasattr(reloaded, "_neurobridge_calibration")
         assert reloaded._neurobridge_calibration == model._neurobridge_calibration
+
+
+class TestTrainStatsMetadata:
+    """Day 7 — T1A: train()-time confidence distribution stash."""
+
+    def test_train_attaches_train_stats_attribute(self, trained_model_and_features):
+        model, _ = trained_model_and_features
+        assert hasattr(model, "_neurobridge_train_stats")
+        stats = model._neurobridge_train_stats
+        assert isinstance(stats, dict)
+        for key in ("median", "std", "n_train"):
+            assert key in stats, f"missing key {key!r} in train stats"
+        assert 0.0 <= stats["median"] <= 1.0
+        assert stats["std"] >= 0.0
+        assert stats["n_train"] >= 1
+
+    def test_train_stats_survives_save_load_roundtrip(
+        self, trained_model_and_features, tmp_path: Path,
+    ):
+        from src.models import bbb_model
+        model, _ = trained_model_and_features
+        path = tmp_path / "m.joblib"
+        bbb_model.save(model, path)
+        reloaded = bbb_model.load(path)
+        assert hasattr(reloaded, "_neurobridge_train_stats")
+        assert reloaded._neurobridge_train_stats == model._neurobridge_train_stats

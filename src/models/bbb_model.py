@@ -84,6 +84,26 @@ def _compute_calibration_bins(
     return bins
 
 
+def _compute_train_stats(
+    model: RandomForestClassifier,
+    X_train: np.ndarray,
+) -> dict[str, float]:
+    """Compute median + std of the model's own confidence on the training set.
+
+    Used as the reference distribution for runtime drift detection. All values
+    are floats so the dict is joblib-roundtrip-safe and JSON-serializable.
+    """
+    if len(X_train) == 0:
+        return {"median": 0.0, "std": 0.0, "n_train": 0}
+    proba = model.predict_proba(X_train)
+    confidence = proba.max(axis=1)
+    return {
+        "median": float(np.median(confidence)),
+        "std": float(np.std(confidence)),
+        "n_train": int(len(X_train)),
+    }
+
+
 def train(
     df: pd.DataFrame,
     label_col: str = "p_np",
@@ -134,11 +154,13 @@ def train(
     model._neurobridge_calibration = _compute_calibration_bins(
         model, X_test, y_test,
     )
+    model._neurobridge_train_stats = _compute_train_stats(model, X_train)
     logger.info(
         "Trained BBB classifier: n=%d, n_features=%d, classes=%s, "
-        "calibration_bins=%d",
+        "calibration_bins=%d, train_confidence_median=%.3f",
         len(y), X.shape[1], model.classes_.tolist(),
         len(model._neurobridge_calibration),
+        model._neurobridge_train_stats["median"],
     )
     return model
 
