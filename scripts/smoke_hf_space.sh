@@ -12,9 +12,14 @@ BASE="${1:-https://mekosotto-hackathon.hf.space}"
 FAIL=0
 
 probe() {
-  local label="$1" url="$2" expect="$3"
+  local label="$1" url="$2" expect="$3" method="${4:-GET}"
   local actual
-  actual="$(curl -sS -o /dev/null -w "%{http_code}" "$url")"
+  if [[ "$method" == "POST" ]]; then
+    actual="$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+      -H 'content-type: application/json' -d '{}' "$url")"
+  else
+    actual="$(curl -sS -o /dev/null -w "%{http_code}" "$url")"
+  fi
   if [[ "$actual" == "$expect" ]]; then
     printf "  OK   %-40s %s\n" "$label" "$actual"
   else
@@ -24,9 +29,9 @@ probe() {
 }
 
 echo "Probing $BASE"
-probe "frontend root"             "$BASE/"                       "200"
-probe "streamlit health"          "$BASE/_stcore/health"          "200"
-probe "fastapi NOT publicly mounted (good)" "$BASE/health"        "403"
+probe "frontend root"             "$BASE/"                       "200" "GET"
+probe "streamlit health"          "$BASE/_stcore/health"          "200" "GET"
+probe "POST to unknown path is rejected" "$BASE/predict/bbb"     "403" "POST"
 
 echo
 if [[ "$FAIL" == "0" ]]; then
