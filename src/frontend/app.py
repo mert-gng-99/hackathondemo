@@ -409,14 +409,56 @@ def _render_eeg_tab() -> None:
     if st.button("Run EEG pipeline", type="primary", key="eeg_run"):
         with st.spinner("Filtering and running ICA…"):
             try:
-                _render_result(_post("/pipeline/eeg", {
+                result = _post("/pipeline/eeg", {
                     "input_path": eeg_in, "output_path": eeg_out,
-                }))
+                })
+                st.session_state["last_eeg_run"] = result
+                _render_result(result)
                 st.toast("EEG pipeline complete", icon="✅")
             except httpx.HTTPStatusError as e:
                 st.error(f"Pipeline failed (HTTP {e.response.status_code}): {e.response.text}")
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+
+    # Day-8 T1C: AI Assistant inline for EEG
+    last_eeg = st.session_state.get("last_eeg_run")
+    if last_eeg is not None:
+        with st.expander("Ask the AI Assistant about this EEG run", expanded=False):
+            eeg_q_presets = [
+                "Why were certain ICA components dropped?",
+                "What does the bandpass filter do?",
+                "Is this run consistent with previous runs?",
+            ]
+            eeg_preset = st.selectbox(
+                "Preset question", options=eeg_q_presets, key="eeg_ai_preset",
+            )
+            eeg_custom = st.text_input(
+                "Or type your own question (optional)",
+                value="", key="eeg_ai_custom",
+            )
+            eeg_question = eeg_custom.strip() or eeg_preset
+            if st.button("Ask AI Assistant", key="eeg_ai_ask"):
+                with st.spinner("Composing rationale…"):
+                    try:
+                        eeg_resp = _post(
+                            "/explain/eeg",
+                            {
+                                "rows": int(last_eeg.get("rows", 0)),
+                                "columns": int(last_eeg.get("columns", 0)),
+                                "duration_sec": float(last_eeg.get("duration_sec", 0.0)),
+                                "mlflow_run_id": last_eeg.get("mlflow_run_id"),
+                                "user_question": eeg_question,
+                            },
+                        )
+                        st.markdown(f"**A:** {eeg_resp['rationale']}")
+                        st.caption(
+                            f"Source: `{eeg_resp.get('source', '?')}` · "
+                            f"Model: `{eeg_resp.get('model') or '—'}`"
+                        )
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"Assistant failed (HTTP {e.response.status_code}): {e.response.text}")
+                    except httpx.RequestError as e:
+                        st.error(f"Cannot reach FastAPI: {e!r}")
 
 
 def _render_mri_tab() -> None:
@@ -637,6 +679,45 @@ def _render_combat_diagnostics(result: dict) -> None:
         f"of harmonization** — the same property the {result['reduction_factor']:.0f}× "
         f"site-gap reduction quantifies."
     )
+
+    # Day-8 T1C: AI Assistant inline for MRI
+    n_subjects = len({r["subject_id"] for r in result.get("rows", [])})
+    with st.expander("Ask the AI Assistant about this ComBat run", expanded=False):
+        mri_q_presets = [
+            "Why does ComBat matter for multi-site MRI?",
+            "How significant is this reduction factor?",
+            "What would I lose without harmonization?",
+        ]
+        mri_preset = st.selectbox(
+            "Preset question", options=mri_q_presets, key="mri_ai_preset",
+        )
+        mri_custom = st.text_input(
+            "Or type your own question (optional)",
+            value="", key="mri_ai_custom",
+        )
+        mri_question = mri_custom.strip() or mri_preset
+        if st.button("Ask AI Assistant", key="mri_ai_ask"):
+            with st.spinner("Composing rationale…"):
+                try:
+                    mri_resp = _post(
+                        "/explain/mri",
+                        {
+                            "site_gap_pre": float(result["site_gap_pre"]),
+                            "site_gap_post": float(result["site_gap_post"]),
+                            "reduction_factor": float(result["reduction_factor"]),
+                            "n_subjects": n_subjects,
+                            "user_question": mri_question,
+                        },
+                    )
+                    st.markdown(f"**A:** {mri_resp['rationale']}")
+                    st.caption(
+                        f"Source: `{mri_resp.get('source', '?')}` · "
+                        f"Model: `{mri_resp.get('model') or '—'}`"
+                    )
+                except httpx.HTTPStatusError as e:
+                    st.error(f"Assistant failed (HTTP {e.response.status_code}): {e.response.text}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI: {e!r}")
 
 
 def _render_ai_assistant_tab() -> None:
