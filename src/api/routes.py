@@ -18,6 +18,8 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from src.api.schemas import (
+    BBBExplainRequest,
+    BBBExplainResponse,
     BBBPredictRequest,
     BBBPredictResponse,
     BBBRequest,
@@ -32,12 +34,14 @@ from src.api.schemas import (
     PipelineResponse,
 )
 from src.core.logger import get_logger
+from src.llm import explainer as llm_explainer
 from src.models import bbb_model
 from src.pipelines import bbb_pipeline, eeg_pipeline, mri_pipeline
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/pipeline")
 predict_router = APIRouter(prefix="/predict")
+explain_router = APIRouter(prefix="/explain")
 
 
 def _wrap(
@@ -319,4 +323,42 @@ def mri_diagnostics(req: MRIDiagnosticsRequest) -> MRIDiagnosticsResponse:
         site_gap_pre=site_gap_pre,
         site_gap_post=site_gap_post,
         reduction_factor=reduction_factor,
+    )
+
+
+@explain_router.post("/bbb", response_model=BBBExplainResponse)
+def explain_bbb(req: BBBExplainRequest) -> BBBExplainResponse:
+    """Natural-language rationale for a single BBB prediction.
+
+    Always returns 200 — the explainer is guaranteed to produce a
+    rationale via deterministic-template fallback. Pydantic enforces
+    a non-empty top_features list; an empty list returns 422 from
+    FastAPI before this handler runs.
+    """
+    payload: llm_explainer.ExplainPayload = {
+        "smiles": req.smiles,
+        "label": req.label,
+        "label_text": req.label_text,
+        "confidence": req.confidence,
+        "top_features": [
+            {"feature": f.feature, "shap_value": f.shap_value}
+            for f in req.top_features
+        ],
+        "calibration": (
+            None
+            if req.calibration is None
+            else {
+                "threshold": req.calibration.threshold,
+                "precision": req.calibration.precision,
+                "support": req.calibration.support,
+            }
+        ),
+        "drift_z": req.drift_z,
+        "user_question": req.user_question or "",
+    }
+    result = llm_explainer.explain(payload)
+    return BBBExplainResponse(
+        rationale=result["rationale"],
+        source=result["source"],
+        model=result["model"],
     )

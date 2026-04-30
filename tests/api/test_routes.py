@@ -228,3 +228,34 @@ class TestMRIDiagnosticsRoute:
             },
         )
         assert resp.status_code == 404
+
+
+class TestExplainBBBRoute:
+    """Day-7 T3B: POST /explain/bbb."""
+
+    def test_returns_200_with_template_source(self, monkeypatch):
+        """Kill-switch on → /explain/bbb returns rationale with source=template."""
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_LLM", "1")
+        body = {
+            "smiles": "CCO",
+            "label": 1,
+            "label_text": "permeable",
+            "confidence": 0.82,
+            "top_features": [
+                {"feature": "fp_341", "shap_value": 0.045},
+                {"feature": "fp_902", "shap_value": -0.031},
+                {"feature": "fp_77", "shap_value": 0.022},
+            ],
+            "calibration": {"threshold": 0.80, "precision": 0.92, "support": 18},
+            "drift_z": 0.42,
+            "user_question": "Why permeable?",
+        }
+        resp = client.post("/explain/bbb", json=body)
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["source"] == "template"
+        assert out["model"] is None
+        # Template must mention all three features
+        for feat in ("fp_341", "fp_902", "fp_77"):
+            assert feat in out["rationale"]
+        assert "permeable" in out["rationale"]

@@ -133,3 +133,31 @@ class MRIDiagnosticsResponse(BaseModel):
     site_gap_pre: float = Field(..., description="Range of per-site means before ComBat")
     site_gap_post: float = Field(..., description="Range of per-site means after ComBat")
     reduction_factor: float = Field(..., description="site_gap_pre / max(site_gap_post, eps)")
+
+
+class BBBExplainRequest(BaseModel):
+    """Day-7 T3B: payload for POST /explain/bbb (chat-style explainer)."""
+    smiles: str = Field(..., description="SMILES string of the molecule")
+    label: int = Field(..., description="Predicted label (0 = non-permeable, 1 = permeable)")
+    label_text: str = Field(..., description="'permeable' or 'non-permeable'")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    top_features: list[FeatureAttribution] = Field(
+        ..., min_length=1,
+        description="Non-empty list of SHAP attributions; an empty list returns 400.",
+    )
+    calibration: CalibrationContext | None = None
+    drift_z: float | None = None
+    user_question: str | None = Field(
+        None,
+        description="Optional question from the user; passed to the LLM prompt only.",
+    )
+
+
+class BBBExplainResponse(BaseModel):
+    """Day-7 T3B: response from POST /explain/bbb."""
+    rationale: str = Field(..., description="2-4 sentence natural-language explanation")
+    source: str = Field(..., description="'llm' or 'template'")
+    model: str | None = Field(
+        None,
+        description="LLM model name when source='llm'; None when source='template'",
+    )
