@@ -24,6 +24,7 @@ class TestRoutePipelineInput:
         name, args = route_pipeline_input("data/raw/subjects/subject_0.nii.gz")
         assert name == "run_mri_pipeline"
         assert args["input_dir"] == "data/raw/subjects"
+        assert "sites_csv" in args
 
     def test_existing_local_dir_without_slash_routes_to_mri(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
