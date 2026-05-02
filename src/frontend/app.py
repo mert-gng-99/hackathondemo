@@ -935,9 +935,9 @@ def _check_api_health() -> tuple[bool, str]:
         return False, type(e).__name__.lower()
 
 
-def _post(endpoint: str, payload: dict) -> dict:
+def _post(endpoint: str, payload: dict, timeout: float = 120.0) -> dict:
     """POST to the FastAPI surface; let httpx raise on non-2xx."""
-    resp = httpx.post(f"{_API_URL}{endpoint}", json=payload, timeout=120.0)
+    resp = httpx.post(f"{_API_URL}{endpoint}", json=payload, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
@@ -1752,12 +1752,13 @@ def main() -> None:
             "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
         )
 
-    bbb_tab, eeg_tab, mri_tab, assistant_tab, experiments_tab = st.tabs([
+    bbb_tab, eeg_tab, mri_tab, assistant_tab, experiments_tab, agent_tab = st.tabs([
         "Molecule",
         "Signal",
         "Image",
         "AI Assistant",
         "Experiments",
+        "🤖 Agent",
     ])
 
     with bbb_tab:
@@ -1770,6 +1771,55 @@ def main() -> None:
         _render_ai_assistant_tab()
     with experiments_tab:
         _render_experiments_tab()
+
+    with agent_tab:
+        st.markdown("### Orchestrator Agent")
+        st.caption(
+            "Pick the pipeline automatically, run it, then ground the response "
+            "in curated reference docs (RAG)."
+        )
+
+        with st.form("agent_form"):
+            agent_input = st.text_input(
+                "Input",
+                value="CCO",
+                help="SMILES (e.g., CCO), .fif/.edf path, or NIfTI directory path",
+            )
+            agent_question = st.text_input(
+                "Question (optional)",
+                value="",
+                help="Ask in any language — the agent will mirror it in the response",
+            )
+            submitted = st.form_submit_button("Run agent")
+
+        if submitted and agent_input:
+            with st.spinner("Agent is reasoning..."):
+                try:
+                    payload: dict = {"user_input": agent_input}
+                    if agent_question:
+                        payload["user_question"] = agent_question
+                    response = _post("/agent/run", payload, timeout=120.0)
+                except Exception as e:
+                    st.error(f"Agent run failed: {e}")
+                else:
+                    st.markdown("#### Response")
+                    st.write(response.get("text", ""))
+                    st.caption(
+                        f"model: `{response.get('model', '?')}` · "
+                        f"finish: `{response.get('finish_reason', '?')}`"
+                    )
+                    trace = response.get("trace", [])
+                    expander_title = f"🧠 Decision trace ({len(trace)} step{'s' if len(trace) != 1 else ''})"
+                    with st.expander(expander_title, expanded=True):
+                        if not trace:
+                            st.write("_(no tool calls)_")
+                        for i, step in enumerate(trace, start=1):
+                            st.markdown(f"**{i}. `{step['name']}`**")
+                            if step.get("error"):
+                                st.error(step["error"])
+                            else:
+                                st.json(step.get("args", {}))
+                                st.json(step.get("result", {}))
 
 
 if __name__ == "__main__":
