@@ -41,6 +41,19 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 | 8 | Grand Finale (Multi-Modal Agents, Track 5 & Public Deploy) | Multi-modal explainers + experiments + deploy surface | Shipped |
 | 9 | Agent/RAG hardening + MRI DL decision layer | Guarded orchestration + `POST /predict/mri` ONNX surface | Shipped — 242 passed, 2 skipped |
 
+### Fusion Engine
+
+`POST /fusion/predict` (and the agent tool `run_fusion`) combines whichever of
+MRI, EEG, and clinical-test scores (MMSE, MoCA, UPDRS, gait, age) the doctor
+has uploaded into a per-disease confidence (Alzheimer's, Parkinson's, other)
+with full attribution showing how much each modality contributed. Missing
+modalities are skipped, not imputed — the engine renormalises onto whichever
+inputs are present so absence naturally lowers confidence rather than
+silently inflating it. Weights live in `src/fusion/weights.py` and are
+heuristic — adjust there. **BBB is intentionally NOT a fusion modality**:
+it is a researcher-side concern (drug permeability) and stays decoupled
+from disease classification.
+
 ## Quick Start
 
 **Prerequisite:** Python 3.10–3.12. The pinned `requirements.txt` has no cp313+ wheels;
