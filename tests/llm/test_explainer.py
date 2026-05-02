@@ -128,3 +128,125 @@ class TestModalityDispatch:
         # Should not raise; should produce a non-empty rationale
         assert result["source"] == "template"
         assert result["rationale"], "rationale must be non-empty"
+
+
+class TestAuthFailureShortCircuits:
+    """A 401 from OpenRouter means the key is unauthorized — every model
+    in the chain will fail the same way, so we must short-circuit instead
+    of burning the full chain on every request."""
+
+    def test_401_short_circuits_to_template_after_one_attempt(self, monkeypatch):
+        from src.llm import explainer as ex
+        from openai import APIStatusError
+        import httpx
+
+        monkeypatch.delenv("NEUROBRIDGE_DISABLE_LLM", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-deliberately-bad")
+
+        attempts: list[str] = []
+
+        def _raise_401(**kwargs):
+            attempts.append(kwargs["model"])
+            req = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            resp = httpx.Response(status_code=401, request=req)
+            raise APIStatusError(message="No auth credentials found", response=resp, body={})
+
+        class _StubCompletions:
+            create = staticmethod(_raise_401)
+
+        class _StubChat:
+            completions = _StubCompletions()
+
+        class _StubClient:
+            chat = _StubChat()
+            def __init__(self, **kwargs):
+                pass
+
+        # Must patch on the `openai` module — the explainer does
+        # `from openai import OpenAI` *inside* the function (see
+        # src/llm/explainer.py:269-275), so any module-level attribute
+        # on `src.llm.explainer` would be a no-op.
+        monkeypatch.setattr("openai.OpenAI", _StubClient)
+
+        out = ex._llm_explain(_payload(), modality="bbb")
+
+        assert out is None, "401 must surface as a None return (caller falls back to template)"
+        assert len(attempts) == 1, f"401 must short-circuit; tried {len(attempts)} models: {attempts}"
+
+    def test_explain_returns_template_source_on_401(self, monkeypatch):
+        from src.llm import explainer as ex
+        from openai import APIStatusError
+        import httpx
+
+        monkeypatch.delenv("NEUROBRIDGE_DISABLE_LLM", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-deliberately-bad")
+
+        def _raise_401(**kwargs):
+            req = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            raise APIStatusError(
+                message="auth",
+                response=httpx.Response(401, request=req),
+                body={},
+            )
+
+        class _Comp:
+            create = staticmethod(_raise_401)
+
+        class _Chat:
+            completions = _Comp()
+
+        class _Client:
+            chat = _Chat()
+            def __init__(self, **kwargs):
+                pass
+
+        monkeypatch.setattr("openai.OpenAI", _Client)
+
+        result = ex.explain(_payload(), modality="bbb")
+
+        assert result["source"] == "template"
+        assert result["model"] is None
+        assert result["rationale"], "rationale must never be empty"
+
+    def test_400_advances_to_next_model_instead_of_short_circuiting(self, monkeypatch):
+        """A 400 from one model is a prompt-shape mismatch with THAT model
+        (some models reject system roles, etc.) — try the next, don't give up."""
+        from src.llm import explainer as ex
+        from openai import APIStatusError
+        import httpx
+
+        monkeypatch.delenv("NEUROBRIDGE_DISABLE_LLM", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-anything")
+
+        attempts: list[str] = []
+        # Force a known multi-model chain so we can count attempts deterministically
+        monkeypatch.setenv("OPENROUTER_FREE_MODELS", "model-a:free,model-b:free,model-c:free")
+
+        def _raise_400(**kwargs):
+            attempts.append(kwargs["model"])
+            req = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            raise APIStatusError(
+                message="bad request",
+                response=httpx.Response(400, request=req),
+                body={},
+            )
+
+        class _Comp:
+            create = staticmethod(_raise_400)
+
+        class _Chat:
+            completions = _Comp()
+
+        class _Client:
+            chat = _Chat()
+            def __init__(self, **kwargs):
+                pass
+
+        monkeypatch.setattr("openai.OpenAI", _Client)
+
+        out = ex._llm_explain(_payload(), modality="bbb")
+
+        assert out is None, "all models 400'd → must return None for template fallback"
+        assert attempts == ["model-a:free", "model-b:free", "model-c:free"], (
+            f"400 must advance to next model; got attempts={attempts}"
+        )
