@@ -51,5 +51,5 @@ class DiseaseScore(BaseModel):
 
 class FusionOutput(BaseModel):
     diseases: list[DiseaseScore]
-    top_disease: str
+    top_disease: str | None
     missing_inputs: list[str] = Field(default_factory=list)

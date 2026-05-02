@@ -40,6 +40,7 @@ class TestFuse:
             assert ds.contributions == []
         assert "mri" in out.missing_inputs
         assert "eeg" in out.missing_inputs
+        assert out.top_disease is None
 
     def test_mri_only_alzheimers_high(self) -> None:
         inp = FusionInput(mri=_mri(prob_alz=0.9))

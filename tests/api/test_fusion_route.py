@@ -36,6 +36,7 @@ class TestFusionRoute:
         for d in data["diseases"]:
             assert abs(d["probability"] - 0.5) < 1e-6
         assert "mri" in data["missing_inputs"]
+        assert data["top_disease"] is None
 
     def test_invalid_probability_returns_422(self) -> None:
         body = {

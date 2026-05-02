@@ -21,7 +21,7 @@ from src.fusion.types import (
 
 logger = get_logger(__name__)
 
-_LOGIT_SCALE = 4.0  # tuned so a single saturated modality maps to ~0.88
+_LOGIT_SCALE = 4.0  # a single saturated modality maps to ~0.77-0.80 (depending on its weight)
 
 
 # Clinical-test name -> (signal_fn, attribute_on_ClinicalScores)
@@ -46,7 +46,10 @@ def fuse(inp: FusionInput) -> FusionOutput:
     for disease in weight_registry.available_diseases():
         diseases.append(_score_one_disease(disease, inp))
 
-    top = max(diseases, key=lambda d: d.probability).disease
+    if any(d.contributions for d in diseases):
+        top: str | None = max(diseases, key=lambda d: d.probability).disease
+    else:
+        top = None
     return FusionOutput(diseases=diseases, top_disease=top, missing_inputs=missing)
 
 
