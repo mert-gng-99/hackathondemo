@@ -288,3 +288,16 @@ class AgentRunResponse(BaseModel):
     trace: list[AgentToolTraceItem] = Field(default_factory=list)
     model: str | None = None
     finish_reason: str = "complete"
+
+
+# --- Fusion engine surface --------------------------------------------------
+
+# Re-export the fusion types so the API surface lives in one file but the
+# implementation stays in src/fusion. This keeps `from src.api.schemas import *`
+# style imports stable for the frontend layer.
+from src.fusion.types import (  # noqa: E402,F401
+    ClinicalScores as FusionClinicalScores,
+    FusionInput as FusionRequest,
+    FusionOutput as FusionResponse,
+    ModalityPrediction as FusionModalityPrediction,
+)

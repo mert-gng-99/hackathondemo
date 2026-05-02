@@ -12,6 +12,7 @@ from src.api.routes import (
     explain_router,
     experiments_router,
     agent_router,
+    fusion_router,   # NEW
 )
 from src.api.schemas import HealthResponse
 
@@ -26,6 +27,7 @@ app.include_router(predict_router)
 app.include_router(explain_router)
 app.include_router(experiments_router)
 app.include_router(agent_router)
+app.include_router(fusion_router)
 
 
 @app.get("/health", response_model=HealthResponse)

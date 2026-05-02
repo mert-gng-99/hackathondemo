@@ -28,6 +28,8 @@ from src.api.schemas import (
     BBBRequest,
     CalibrationContext,
     EEGExplainRequest,
+    FusionRequest,
+    FusionResponse,
     EEGExplainResponse,
     EEGRequest,
     FeatureAttribution,
@@ -632,3 +634,15 @@ def run_agent(req: AgentRunRequest) -> AgentRunResponse:
         model=result.model,
         finish_reason=result.finish_reason,
     )
+
+
+# --- Fusion router ---------------------------------------------------------
+
+fusion_router = APIRouter(prefix="/fusion")
+
+
+@fusion_router.post("/predict", response_model=FusionResponse)
+def fusion_predict(req: FusionRequest) -> FusionResponse:
+    """Combine MRI, EEG, and clinical scores into per-disease confidence."""
+    from src.fusion.engine import fuse as fuse_engine
+    return fuse_engine(req)
