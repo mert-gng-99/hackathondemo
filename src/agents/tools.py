@@ -102,6 +102,8 @@ def _make_eeg_executor(processed_dir: Path) -> Callable[[EEGPipelineInput], EEGP
         from src.api.schemas import EEGRequest
         from src.api import routes as api_routes
         from fastapi import HTTPException
+        # TODO(post-hackathon): per-call output path. Concurrent /agent/run
+        # invocations race on this file and clobber each other's MLflow runs.
         out_path = processed_dir / "eeg_features.parquet"
         try:
             response = api_routes.run_eeg(
@@ -129,6 +131,8 @@ def _make_mri_executor(processed_dir: Path) -> Callable[[MRIPipelineInput], MRIP
         from src.api.schemas import MRIRequest
         from src.api import routes as api_routes
         from fastapi import HTTPException
+        # TODO(post-hackathon): per-call output path. Concurrent /agent/run
+        # invocations race on this file and clobber each other's MLflow runs.
         out_path = processed_dir / "mri_features.parquet"
         sites_csv = inp.sites_csv or str(Path(inp.input_dir) / "sites.csv")
         try:
