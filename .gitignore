@@ -42,3 +42,6 @@ data/knowledge_base/*
 
 # RAG built artifacts
 data/processed/faiss_index/
+
+# Plan: external-assets-integration — clinical RAG corpus and pre-built TF-IDF index
+data/external_rag/
