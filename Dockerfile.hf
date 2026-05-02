@@ -13,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # --- system deps for RDKit, nibabel, MNE ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     libgomp1 \
     libxrender1 \
     libsm6 \
@@ -40,17 +41,26 @@ COPY supervisord.conf ./supervisord.conf
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+# Seed demo artifacts FIRST so even if a heavier pipeline step fails, the
+# core showcase paths (MRI 2D, MRI volumetric ONNX, EEG joblib, clinical
+# RAG, axial PNG) still work. seed_demo_artifacts.py is idempotent.
+RUN python scripts/seed_demo_artifacts.py
+
 # Seed raw data from fixtures so the deployed Signal/Image/Molecule tabs
 # work on first click. Then run all three pipelines so mlruns/ contains
 # one run per modality — feeds /experiments/runs and the BBB provenance
 # strip. data/raw/* is gitignored locally so we cannot COPY it.
+#
+# NEUROBRIDGE_DISABLE_MLFLOW=1 during build avoids MLflow run-tagging
+# fragility in the slim image (no real .git tree to tag against). The
+# entrypoint can re-run with MLflow on if desired.
 RUN mkdir -p data/raw data/processed && \
     cp tests/fixtures/bbbp_sample.csv data/raw/bbbp.csv && \
     cp tests/fixtures/eeg_sample.fif data/raw/eeg.fif && \
-    python -m src.pipelines.bbb_pipeline && \
-    python -m src.models.bbb_model && \
-    python -c "from pathlib import Path; from src.pipelines.eeg_pipeline import run_pipeline; run_pipeline(input_path=Path('tests/fixtures/eeg_sample.fif'), output_path=Path('data/processed/eeg_features.parquet'))" && \
-    python -c "from pathlib import Path; from src.pipelines.mri_pipeline import run_pipeline; run_pipeline(input_dir=Path('tests/fixtures/mri_sample'), sites_csv=Path('tests/fixtures/mri_sample/sites.csv'), output_path=Path('data/processed/mri_features.parquet'))"
+    NEUROBRIDGE_DISABLE_MLFLOW=1 python -m src.pipelines.bbb_pipeline && \
+    NEUROBRIDGE_DISABLE_MLFLOW=1 python -m src.models.bbb_model && \
+    NEUROBRIDGE_DISABLE_MLFLOW=1 python -c "from pathlib import Path; from src.pipelines.eeg_pipeline import run_pipeline; run_pipeline(input_path=Path('tests/fixtures/eeg_sample.fif'), output_path=Path('data/processed/eeg_features.parquet'))" && \
+    NEUROBRIDGE_DISABLE_MLFLOW=1 python -c "from pathlib import Path; from src.pipelines.mri_pipeline import run_pipeline; run_pipeline(input_dir=Path('tests/fixtures/mri_sample'), sites_csv=Path('tests/fixtures/mri_sample/sites.csv'), output_path=Path('data/processed/mri_features.parquet'))"
 
 # --- RAG knowledge base ingest ---
 # Build the FAISS index from any seed docs in tests/fixtures/kb_sample/
@@ -60,10 +70,8 @@ RUN mkdir -p data/raw data/processed && \
 COPY tests/fixtures/kb_sample/ ./data/knowledge_base/seed/
 RUN python -m src.rag.ingest data/knowledge_base data/processed/faiss_index
 
-# --- Demo-time artifacts (MRI 2D / MRI volumetric ONNX / EEG joblib /
-#     clinical TF-IDF RAG / axial PNG fixture). Idempotent script;
-#     entrypoint also re-runs it on container start so a mounted-volume
-#     deployment can re-seed without a rebuild.
+# --- Re-run demo-artifact seeding after RAG ingest in case any step above
+#     altered what's on disk. Idempotent — only fills missing artifacts.
 RUN python scripts/seed_demo_artifacts.py
 
 # --- HF Spaces convention ---
