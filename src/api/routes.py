@@ -616,7 +616,14 @@ def _build_orchestrator():
         timeout=30.0,
     )
     rag_dir = _DEFAULT_RAG_INDEX_DIR if _DEFAULT_RAG_INDEX_DIR.exists() else None
-    tools = build_default_tools(rag_index_dir=rag_dir)
+    clinical_idx = Path(os.environ.get(
+        "CLINICAL_RAG_INDEX_PATH",
+        "data/external_rag/index/rag_index.pkl",
+    ))
+    tools = build_default_tools(
+        rag_index_dir=rag_dir,
+        clinical_rag_index_path=clinical_idx if clinical_idx.exists() else None,
+    )
     model = os.environ.get(_AGENT_MODEL_ENV, _AGENT_DEFAULT_MODEL)
     return Orchestrator(
         llm_client=client,

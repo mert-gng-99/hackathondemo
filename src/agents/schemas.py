@@ -6,7 +6,7 @@ names lowercase + snake_case so prompts and JSON outputs align.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,14 @@ class RetrieveContextInput(BaseModel):
     """Input for `retrieve_context` — natural-language query into the KB."""
     query: str = Field(..., min_length=2, description="Search query for the knowledge base")
     k: int = Field(4, ge=1, le=10, description="Number of chunks to return")
+    corpus: Literal["reference", "clinical"] = Field(
+        "reference",
+        description=(
+            "Which corpus to query. 'reference' = curated FAISS index (default). "
+            "'clinical' = TF-IDF index over peer-reviewed Alzheimer's/Parkinson's "
+            "papers with Turkish+English query expansion."
+        ),
+    )
 
 
 # --- Pipeline tool outputs --------------------------------------------------

@@ -157,11 +157,41 @@ def _make_mri_executor(processed_dir: Path) -> Callable[[MRIPipelineInput], MRIP
     return execute
 
 
-def _make_retrieve_executor(rag_index_dir: Path | None) -> Callable[[RetrieveContextInput], RetrieveContextOutput]:
-    """Closure: capture the index dir; lazy-load the retriever on first call."""
-    state: dict[str, Any] = {"retriever": None}
+def _make_retrieve_executor(
+    rag_index_dir: Path | None,
+    clinical_rag_index_path: Path | None = None,
+) -> Callable[[RetrieveContextInput], RetrieveContextOutput]:
+    """Closure: capture both index sources; lazy-load each on first use."""
+    state: dict[str, Any] = {"retriever": None, "clinical_payload": None}
 
     def execute(inp: RetrieveContextInput) -> RetrieveContextOutput:
+        if inp.corpus == "clinical":
+            if clinical_rag_index_path is None or not Path(clinical_rag_index_path).exists():
+                logger.warning(
+                    "retrieve_context corpus=clinical but no index path configured (path=%s)",
+                    clinical_rag_index_path,
+                )
+                return RetrieveContextOutput(query=inp.query, chunks=[])
+            if state["clinical_payload"] is None:
+                from src.rag.clinical.loader import load_index
+                state["clinical_payload"] = load_index(Path(clinical_rag_index_path))
+            from src.rag.clinical.retrieve import retrieve_clinical
+            result = retrieve_clinical(state["clinical_payload"], inp.query, top_k=inp.k)
+            return RetrieveContextOutput(
+                query=inp.query,
+                chunks=[
+                    {
+                        "source": ev.source,
+                        "page_start": ev.page_start,
+                        "page_end": ev.page_end,
+                        "text": ev.sentence,
+                        "score": ev.score,
+                    }
+                    for ev in result.evidence
+                ],
+            )
+
+        # corpus == "reference" — existing FAISS path.
         if rag_index_dir is None or not (rag_index_dir / "index.bin").exists():
             return RetrieveContextOutput(query=inp.query, chunks=[])
         if state["retriever"] is None:
@@ -176,6 +206,7 @@ def _make_retrieve_executor(rag_index_dir: Path | None) -> Callable[[RetrieveCon
 def build_default_tools(
     rag_index_dir: Path | None,
     processed_dir: Path = Path("data/processed"),
+    clinical_rag_index_path: Path | None = None,
 ) -> list[Tool]:
     """Return the 5 tools the orchestrator gets by default."""
     return [
@@ -217,15 +248,16 @@ def build_default_tools(
         Tool(
             name="retrieve_context",
             description=(
-                "Retrieve up to k passages from the curated reference knowledge "
-                "base. Use AFTER a pipeline tool returns, to ground your final "
-                "synthesis in cited literature. Formulate a focused query "
-                "based on the pipeline output (e.g., 'BBB permeability of "
-                "small lipophilic molecules' or 'ComBat site harmonization')."
+                "Retrieve up to k passages from a knowledge base. corpus='clinical' "
+                "queries the peer-reviewed Alzheimer's/Parkinson's papers (TF-IDF, "
+                "supports Turkish keywords like 'egzersiz', 'beslenme', 'unutkanlik'); "
+                "default corpus='reference' queries the curated FAISS index. Use "
+                "AFTER a pipeline tool returns, to ground your final synthesis in "
+                "cited literature."
             ),
             input_model=RetrieveContextInput,
             output_model=RetrieveContextOutput,
-            execute=_make_retrieve_executor(rag_index_dir),
+            execute=_make_retrieve_executor(rag_index_dir, clinical_rag_index_path),
         ),
         Tool(
             name="run_fusion",
