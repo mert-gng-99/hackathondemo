@@ -374,8 +374,8 @@ def research_drug_dose_adjustment(req: DrugDoseAdjustmentRequest) -> DrugDoseAdj
         try:
             artifact = _bbb_model_path()
             if artifact.exists():
-                model = bbb_model.load_model(artifact)
-                bbb_pred = bbb_model.predict_one(model, req.smiles)
+                model = bbb_model.load(artifact)
+                bbb_pred = bbb_model.predict_with_proba(model, req.smiles)
                 drug_permeable = bool(bbb_pred["label"] == 1)
         except (FileNotFoundError, ValueError, KeyError) as e:
             logger.warning("could not auto-resolve BBB permeability for smiles=%s: %s", req.smiles, e)
@@ -710,7 +710,37 @@ agent_router = APIRouter(prefix="/agent")
 
 _DEFAULT_RAG_INDEX_DIR = Path("data/processed/faiss_index")
 _AGENT_MODEL_ENV = "NEUROBRIDGE_AGENT_MODEL"
-_AGENT_DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
+_AGENT_DEFAULT_MODEL = "openai/gpt-oss-20b:free"
+# Fallback chain probed at orchestrator-build time. First model returning a
+# non-404/429 ping wins. Override via NEUROBRIDGE_AGENT_MODEL env (single id)
+# or NEUROBRIDGE_AGENT_MODEL_CHAIN (comma-separated).
+_AGENT_FALLBACK_CHAIN: tuple[str, ...] = (
+    "openai/gpt-oss-20b:free",
+    "minimax/minimax-m2.5:free",
+    "tencent/hy3-preview:free",
+    "inclusionai/ling-2.6-1t:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+)
+
+
+def _pick_working_agent_model(client: Any, candidates: tuple[str, ...]) -> str:
+    """Return the first candidate that responds to a tiny ping; else last one."""
+    for m in candidates:
+        try:
+            client.chat.completions.create(
+                model=m,
+                messages=[{"role": "user", "content": "OK"}],
+                max_tokens=4, temperature=0,
+            )
+            logger.info("agent model selected: %s", m)
+            return m
+        except Exception as e:
+            logger.info("agent model unavailable: %s (%s)", m, type(e).__name__)
+    logger.warning("no agent model responded; falling back to %s", candidates[-1])
+    return candidates[-1]
 
 
 def _build_orchestrator():
@@ -742,7 +772,20 @@ def _build_orchestrator():
         rag_index_dir=rag_dir,
         clinical_rag_index_path=clinical_idx if clinical_idx.exists() else None,
     )
-    model = os.environ.get(_AGENT_MODEL_ENV, _AGENT_DEFAULT_MODEL)
+    # Resolve agent model. NEUROBRIDGE_AGENT_MODEL overrides; otherwise probe
+    # the fallback chain (NEUROBRIDGE_AGENT_MODEL_CHAIN env to override the
+    # candidate list) and pick the first one that responds. Demo robustness:
+    # OpenRouter free-tier IDs churn; this avoids hard-coding a stale id.
+    explicit = os.environ.get(_AGENT_MODEL_ENV)
+    if explicit:
+        model = explicit
+    else:
+        chain_raw = os.environ.get("NEUROBRIDGE_AGENT_MODEL_CHAIN")
+        chain = (
+            tuple(s.strip() for s in chain_raw.split(",") if s.strip())
+            if chain_raw else _AGENT_FALLBACK_CHAIN
+        )
+        model = _pick_working_agent_model(client, chain)
     return Orchestrator(
         llm_client=client,
         tools=tools,

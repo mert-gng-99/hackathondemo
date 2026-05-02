@@ -45,3 +45,7 @@ data/processed/faiss_index/
 
 # Plan: external-assets-integration — clinical RAG corpus and pre-built TF-IDF index
 data/external_rag/
+
+# User-local files (presentations, Office lock files)
+*.pptx
+~$*

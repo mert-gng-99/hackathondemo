@@ -1208,10 +1208,7 @@ def _render_eeg_tab() -> None:
         "Input FIF/EDF path",
         "tests/fixtures/eeg_sample.fif",
         key="eeg_in",
-        help=(
-            "Defaults to the bundled EEG fixture so the demo runs out of "
-            "the box. Replace with your own .fif/.edf path on a real run."
-        ),
+        help="Path to a .fif/.edf EEG recording on the server filesystem.",
     )
     eeg_out = st.text_input(
         "Output Parquet path",
@@ -1320,10 +1317,6 @@ def _render_mri_tab() -> None:
 
     st.markdown("#### MRI Image Model")
     mri_kind = os.environ.get("MRI_MODEL_KIND", "volumetric_onnx")
-    st.caption(
-        f"Active backend: `{mri_kind}` — set `MRI_MODEL_KIND=resnet18_2d` "
-        "to switch to the 2D 4-class Alzheimer's classifier."
-    )
 
     if mri_kind == "resnet18_2d":
         mri_image = st.text_input(
@@ -1380,8 +1373,7 @@ def _render_mri_tab() -> None:
             "Resize W", min_value=1, max_value=256, value=64, step=1, key="mri_predict_w"
         )
         st.caption(
-            "Defaults to 64³ for production exports. Use 8³ when testing with the "
-            "dummy ONNX fixture from `tests/fixtures/build_dummy_mri_onnx.py`."
+            "Resize target as (D, H, W). Default 64³ matches typical model exports."
         )
         if st.button("Predict MRI image", key="mri_predict"):
             labels = [x.strip() for x in mri_labels.split(",") if x.strip()]
@@ -1416,9 +1408,8 @@ def _render_mri_tab() -> None:
 
     st.markdown("#### EEG Pretrained Classifier")
     st.caption(
-        "Stub-able for the demo: drop a sklearn `predict_proba` joblib at "
-        "`data/processed/eeg_clf.joblib` (or set `EEG_CLF_ARTIFACT`). Default "
-        "labels are `(control, alzheimers)` — override via `EEG_CLF_LABELS`."
+        "Pretrained sklearn classifier on EEG band-power features. "
+        "Output: per-class probabilities for `(control, alzheimers)`."
     )
     eeg_csv = st.text_area(
         "EEG features (comma-separated)",

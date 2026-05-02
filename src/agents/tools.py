@@ -233,10 +233,10 @@ def _make_dose_adjuster_executor() -> Callable[[DrugDoseAdjustmentInput], DrugDo
             try:
                 from src.models import bbb_model
                 import os as _os
-                artifact = Path(_os.environ.get("BBB_MODEL_PATH", "data/processed/bbb_model.pkl"))
+                artifact = Path(_os.environ.get("BBB_MODEL_PATH", "data/processed/bbb_model.joblib"))
                 if artifact.exists():
-                    model = bbb_model.load_model(artifact)
-                    pred = bbb_model.predict_one(model, inp.smiles)
+                    model = bbb_model.load(artifact)
+                    pred = bbb_model.predict_with_proba(model, inp.smiles)
                     drug_permeable = bool(pred["label"] == 1)
             except (FileNotFoundError, ValueError, KeyError) as e:
                 logger.warning(

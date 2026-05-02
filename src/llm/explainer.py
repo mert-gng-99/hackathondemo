@@ -63,6 +63,7 @@ _LLM_TEMPERATURE = 0.3
 # Entries marked "currently 429" have valid IDs but were quota-exhausted at
 # probe time; kept because OpenRouter rate-limits are per-window and recover.
 _DEFAULT_FREE_MODEL_CHAIN: tuple[str, ...] = (
+    "openai/gpt-oss-20b:free",                             # 20B — verified OK 2026-05-02
     "inclusionai/ling-2.6-1t:free",                        # ~1T flagship — verified OK, returns content
     "nvidia/nemotron-3-super-120b-a12b:free",              # 120B — verified OK, returns content
     "minimax/minimax-m2.5:free",                           # MoE — verified OK, returns content
