@@ -1329,11 +1329,25 @@ def _render_mri_tab() -> None:
         "control,abnormal",
         key="mri_predict_labels",
     )
+    shape_cols = st.columns(3)
+    target_d = shape_cols[0].number_input(
+        "Resize D", min_value=1, max_value=256, value=64, step=1, key="mri_predict_d"
+    )
+    target_h = shape_cols[1].number_input(
+        "Resize H", min_value=1, max_value=256, value=64, step=1, key="mri_predict_h"
+    )
+    target_w = shape_cols[2].number_input(
+        "Resize W", min_value=1, max_value=256, value=64, step=1, key="mri_predict_w"
+    )
+    st.caption(
+        "Defaults to 64³ for production exports. Use 8³ when testing with the "
+        "dummy ONNX fixture from `tests/fixtures/build_dummy_mri_onnx.py`."
+    )
     if st.button("Predict MRI image", key="mri_predict"):
         labels = [x.strip() for x in mri_labels.split(",") if x.strip()]
         payload: dict = {
             "input_path": mri_image,
-            "target_shape": [64, 64, 64],
+            "target_shape": [int(target_d), int(target_h), int(target_w)],
         }
         if labels:
             payload["label_names"] = labels
