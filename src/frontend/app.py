@@ -1414,6 +1414,47 @@ def _render_mri_tab() -> None:
                     if probs:
                         st.dataframe(probs, use_container_width=True, hide_index=True)
 
+    st.markdown("#### EEG Pretrained Classifier")
+    st.caption(
+        "Stub-able for the demo: drop a sklearn `predict_proba` joblib at "
+        "`data/processed/eeg_clf.joblib` (or set `EEG_CLF_ARTIFACT`). Default "
+        "labels are `(control, alzheimers)` — override via `EEG_CLF_LABELS`."
+    )
+    eeg_csv = st.text_area(
+        "EEG features (comma-separated)",
+        ",".join(["0.0"] * 16),
+        key="eeg_predict_features",
+        height=80,
+    )
+    if st.button("Predict EEG", key="eeg_predict"):
+        try:
+            features = [float(x.strip()) for x in eeg_csv.split(",") if x.strip()]
+        except ValueError:
+            st.error("EEG features must all be numeric.")
+        else:
+            payload = {"features": features}
+            with st.spinner("Running EEG classifier..."):
+                try:
+                    result = _post("/predict/eeg", payload, timeout=30.0)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 503:
+                        st.warning(
+                            "EEG model artifact missing. Drop the trained joblib at "
+                            "`data/processed/eeg_clf.joblib` or set `EEG_CLF_ARTIFACT`."
+                        )
+                    else:
+                        st.error(f"EEG prediction failed (HTTP {e.response.status_code}): {e.response.text}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+                else:
+                    st.metric(
+                        label=result.get("label_text", "prediction"),
+                        value=f"{float(result.get('confidence', 0.0)) * 100:.1f}%",
+                    )
+                    probs = result.get("probabilities", [])
+                    if probs:
+                        st.dataframe(probs, use_container_width=True, hide_index=True)
+
 
 def _render_prediction_card(result: dict) -> None:
     """Editorial decision card: provenance · verdict · signals · SHAP."""
