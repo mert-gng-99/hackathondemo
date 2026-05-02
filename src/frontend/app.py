@@ -1319,60 +1319,100 @@ def _render_mri_tab() -> None:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
 
     st.markdown("#### MRI Image Model")
-    mri_image = st.text_input(
-        "NIfTI image",
-        "tests/fixtures/mri_sample/subject_0.nii.gz",
-        key="mri_predict_image",
-    )
-    mri_labels = st.text_input(
-        "Class labels",
-        "control,abnormal",
-        key="mri_predict_labels",
-    )
-    shape_cols = st.columns(3)
-    target_d = shape_cols[0].number_input(
-        "Resize D", min_value=1, max_value=256, value=64, step=1, key="mri_predict_d"
-    )
-    target_h = shape_cols[1].number_input(
-        "Resize H", min_value=1, max_value=256, value=64, step=1, key="mri_predict_h"
-    )
-    target_w = shape_cols[2].number_input(
-        "Resize W", min_value=1, max_value=256, value=64, step=1, key="mri_predict_w"
-    )
+    mri_kind = os.environ.get("MRI_MODEL_KIND", "volumetric_onnx")
     st.caption(
-        "Defaults to 64³ for production exports. Use 8³ when testing with the "
-        "dummy ONNX fixture from `tests/fixtures/build_dummy_mri_onnx.py`."
+        f"Active backend: `{mri_kind}` — set `MRI_MODEL_KIND=resnet18_2d` "
+        "to switch to the 2D 4-class Alzheimer's classifier."
     )
-    if st.button("Predict MRI image", key="mri_predict"):
-        labels = [x.strip() for x in mri_labels.split(",") if x.strip()]
-        payload: dict = {
-            "input_path": mri_image,
-            "target_shape": [int(target_d), int(target_h), int(target_w)],
-        }
-        if labels:
-            payload["label_names"] = labels
-        with st.spinner("Running MRI image model..."):
-            try:
-                result = _post("/predict/mri", payload, timeout=120.0)
-            except httpx.HTTPStatusError as e:
-                detail = e.response.text
-                if e.response.status_code == 503:
-                    st.warning(
-                        "MRI model artifact is not available yet. Export the trained "
-                        "ONNX model to `data/processed/mri_model.onnx` or set `MRI_MODEL_PATH`."
-                    )
+
+    if mri_kind == "resnet18_2d":
+        mri_image = st.text_input(
+            "2D MRI image (.png/.jpg)",
+            "tests/fixtures/mri_sample/subject_0_axial.png",
+            key="mri_predict_image",
+        )
+        st.caption(
+            "Resnet18 4-class — labels: MildDemented, ModerateDemented, "
+            "NonDemented, VeryMildDemented. Resize/labels are baked into the model."
+        )
+        if st.button("Predict MRI image", key="mri_predict"):
+            payload = {"input_path": mri_image}
+            with st.spinner("Running 2D MRI model..."):
+                try:
+                    result = _post("/predict/mri", payload, timeout=120.0)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 503:
+                        st.warning(
+                            "MRI 2D model artifact missing. Drop the trained checkpoint at "
+                            "`data/processed/mri_dl_2d/best_model.pt` or set `MRI_MODEL_PATH_2D`."
+                        )
+                    else:
+                        st.error(f"MRI prediction failed (HTTP {e.response.status_code}): {e.response.text}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
                 else:
-                    st.error(f"MRI prediction failed (HTTP {e.response.status_code}): {detail}")
-            except httpx.RequestError as e:
-                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
-            else:
-                st.metric(
-                    label=result.get("label_text", "prediction"),
-                    value=f"{float(result.get('confidence', 0.0)) * 100:.1f}%",
-                )
-                probs = result.get("probabilities", [])
-                if probs:
-                    st.dataframe(probs, use_container_width=True, hide_index=True)
+                    st.metric(
+                        label=result.get("label_text", "prediction"),
+                        value=f"{float(result.get('confidence', 0.0)) * 100:.1f}%",
+                    )
+                    probs = result.get("probabilities", [])
+                    if probs:
+                        st.dataframe(probs, use_container_width=True, hide_index=True)
+    else:
+        mri_image = st.text_input(
+            "NIfTI image",
+            "tests/fixtures/mri_sample/subject_0.nii.gz",
+            key="mri_predict_image",
+        )
+        mri_labels = st.text_input(
+            "Class labels",
+            "control,abnormal",
+            key="mri_predict_labels",
+        )
+        shape_cols = st.columns(3)
+        target_d = shape_cols[0].number_input(
+            "Resize D", min_value=1, max_value=256, value=64, step=1, key="mri_predict_d"
+        )
+        target_h = shape_cols[1].number_input(
+            "Resize H", min_value=1, max_value=256, value=64, step=1, key="mri_predict_h"
+        )
+        target_w = shape_cols[2].number_input(
+            "Resize W", min_value=1, max_value=256, value=64, step=1, key="mri_predict_w"
+        )
+        st.caption(
+            "Defaults to 64³ for production exports. Use 8³ when testing with the "
+            "dummy ONNX fixture from `tests/fixtures/build_dummy_mri_onnx.py`."
+        )
+        if st.button("Predict MRI image", key="mri_predict"):
+            labels = [x.strip() for x in mri_labels.split(",") if x.strip()]
+            payload: dict = {
+                "input_path": mri_image,
+                "target_shape": [int(target_d), int(target_h), int(target_w)],
+            }
+            if labels:
+                payload["label_names"] = labels
+            with st.spinner("Running MRI image model..."):
+                try:
+                    result = _post("/predict/mri", payload, timeout=120.0)
+                except httpx.HTTPStatusError as e:
+                    detail = e.response.text
+                    if e.response.status_code == 503:
+                        st.warning(
+                            "MRI model artifact is not available yet. Export the trained "
+                            "ONNX model to `data/processed/mri_model.onnx` or set `MRI_MODEL_PATH`."
+                        )
+                    else:
+                        st.error(f"MRI prediction failed (HTTP {e.response.status_code}): {detail}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+                else:
+                    st.metric(
+                        label=result.get("label_text", "prediction"),
+                        value=f"{float(result.get('confidence', 0.0)) * 100:.1f}%",
+                    )
+                    probs = result.get("probabilities", [])
+                    if probs:
+                        st.dataframe(probs, use_container_width=True, hide_index=True)
 
 
 def _render_prediction_card(result: dict) -> None:
