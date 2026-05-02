@@ -113,6 +113,29 @@ class BBBPredictResponse(BaseModel):
     )
 
 
+class EEGPredictRequest(BaseModel):
+    """Single-subject EEG-features prediction request."""
+    features: list[float] = Field(
+        ..., min_length=1,
+        description="EEG features matching the classifier's training-time feature count.",
+    )
+
+
+class EEGClassProbability(BaseModel):
+    """One EEG model class probability."""
+    label: int
+    label_text: str
+    probability: float
+
+
+class EEGPredictResponse(BaseModel):
+    """EEG prediction payload — same shape as MRIPredictResponse minus model_path."""
+    label: int
+    label_text: str
+    confidence: float
+    probabilities: list[EEGClassProbability]
+
+
 class MRIPredictRequest(BaseModel):
     """Single-subject MRI image prediction request."""
     input_path: str = Field(

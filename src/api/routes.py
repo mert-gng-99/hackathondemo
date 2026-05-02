@@ -27,7 +27,10 @@ from src.api.schemas import (
     BBBPredictResponse,
     BBBRequest,
     CalibrationContext,
+    EEGClassProbability,
     EEGExplainRequest,
+    EEGPredictRequest,
+    EEGPredictResponse,
     FusionRequest,
     FusionResponse,
     EEGExplainResponse,
@@ -314,6 +317,43 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         drift_z=drift_z,
         rolling_n=rolling_n,
         provenance=provenance,
+    )
+
+
+@predict_router.post("/eeg", response_model=EEGPredictResponse)
+def predict_eeg(req: EEGPredictRequest) -> EEGPredictResponse:
+    """Predict from EEG features using an externally-trained sklearn classifier.
+
+    Real artifact lands at data/processed/eeg_clf.joblib (override via
+    EEG_CLF_ARTIFACT). For the demo a stub fixture (RandomForestClassifier
+    on synthetic features) is acceptable — the response shape stays stable.
+    """
+    import numpy as np
+    from src.models import eeg_model
+
+    artifact = Path(os.environ.get("EEG_CLF_ARTIFACT", "data/processed/eeg_clf.joblib"))
+    if not artifact.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"EEG model artifact not available at {artifact}. "
+                "Drop the trained joblib at this path or set EEG_CLF_ARTIFACT."
+            ),
+        )
+    try:
+        clf = eeg_model.load(artifact)
+        features = np.asarray(req.features, dtype=np.float32)
+        out = eeg_model.predict_features(clf, features)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return EEGPredictResponse(
+        label=int(out["label"]),
+        label_text=str(out["label_text"]),
+        confidence=float(out["confidence"]),
+        probabilities=[EEGClassProbability(**p) for p in out["probabilities"]],
     )
 
 
