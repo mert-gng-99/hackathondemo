@@ -252,44 +252,88 @@ class TestAuthFailureShortCircuits:
         )
 
 
-import os as _os
-
-import pytest as _pytest
-
-
-@_pytest.mark.skipif(
-    not _os.environ.get("OPENROUTER_API_KEY"),
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("OPENROUTER_API_KEY"),
     reason="OPENROUTER_API_KEY not set — skipping live LLM integration test",
 )
-@_pytest.mark.skipif(
-    _os.environ.get("NEUROBRIDGE_DISABLE_LLM") == "1",
+@pytest.mark.skipif(
+    os.environ.get("NEUROBRIDGE_DISABLE_LLM") == "1",
     reason="NEUROBRIDGE_DISABLE_LLM=1 — skipping live LLM integration test",
 )
 class TestLiveOpenRouterLLM:
     """End-to-end: hit a real OpenRouter free-tier model and assert
     `explain()` returns source='llm' with non-empty content. Skipped
-    when no key is set or the kill-switch is on."""
+    when no key is set or the kill-switch is on.
 
-    def test_bbb_explain_returns_llm_source_with_real_key(self):
+    Marked `slow` because it makes a real network round-trip
+    (worst case ~80s if the entire chain is unreachable). Run with
+    `pytest -m slow` or include it in the default suite by not passing
+    `-m "not slow"`."""
+
+    def test_bbb_explain_returns_llm_source_with_real_key(self, caplog):
+        import logging
         from src.llm import explainer as ex
 
-        result = ex.explain(_payload(), modality="bbb")
+        with caplog.at_level(logging.INFO, logger="src.llm.explainer"):
+            result = ex.explain(_payload(), modality="bbb")
 
-        # If every model in the chain is rate-limited or unreachable RIGHT NOW
-        # the result will fall back to template — that's a flaky-network
-        # condition, not a code bug. Surface it as an XFAIL-style assertion
-        # message instead of a hard failure.
+        # Flaky-network safety net: only skip when we have evidence the
+        # template fallback fired due to transient infra (rate-limit,
+        # 5xx, network). If the fallback fired silently — no infra-error
+        # log line — that's a real regression we want to fail loud.
         if result["source"] == "template":
-            _pytest.skip(
+            log_text = " ".join(r.getMessage() for r in caplog.records)
+            transient_signals = (
+                "429", "OpenRouter 5", "OpenRouter 4",  # status-code log lines
+                "connection error", "timeout",          # transport-error log lines
+                "All free models exhausted",            # chain-end log line
+            )
+            had_infra_evidence = any(s.lower() in log_text.lower() for s in transient_signals)
+            if not had_infra_evidence:
+                pytest.fail(
+                    "explain() fell back to template with NO infra-error log "
+                    "line — this is a real regression, not a network blip. "
+                    f"Captured logs: {log_text!r}"
+                )
+            pytest.skip(
                 "All free models in the chain were rate-limited or unreachable "
                 "at test time. Re-run later or run scripts/diagnose_openrouter.py."
             )
 
         assert result["source"] == "llm"
-        assert result["model"] is not None and result["model"].endswith(":free")
+        assert result["model"] is not None and result["model"].endswith(":free"), (
+            f"unexpected model id (must end with ':free' to ensure no paid model "
+            f"snuck into the chain): {result['model']!r}"
+        )
         assert result["rationale"].strip(), "LLM returned empty rationale"
-        # Sanity: the rationale should mention SOMETHING about the prediction.
-        # We do not assert on exact model wording (non-deterministic), but
-        # we do assert it isn't a generic refusal/safety-filter response.
+
+        # Refusal/safety-filter sanity: catch the common patterns instead
+        # of just one prefix.
         lowered = result["rationale"].lower()
-        assert not lowered.startswith("i cannot"), f"LLM refused: {result['rationale']!r}"
+        refusal_signals = (
+            "i cannot",
+            "i can't",
+            "i'm sorry, but i",
+            "i'm sorry, i can't",
+            "as an ai",
+            "as a language model",
+            "i'm unable to",
+            "i do not have the ability",
+        )
+        assert not any(lowered.startswith(s) for s in refusal_signals), (
+            f"LLM refused (matched refusal pattern): {result['rationale']!r}"
+        )
+
+        # Positive on-topic assertion: the rationale must reference at least
+        # one of the SHAP feature names from the payload, OR the verdict
+        # word ("permeable" / "non-permeable"). A model that produced
+        # off-topic small-talk would fail here.
+        payload = _payload()
+        feature_names = [f["feature"] for f in payload["top_features"]]
+        verdict = payload["label_text"].lower()
+        on_topic_anchors = [f.lower() for f in feature_names] + [verdict]
+        assert any(anchor in lowered for anchor in on_topic_anchors), (
+            f"rationale appears off-topic (no mention of SHAP features "
+            f"{feature_names!r} or verdict {verdict!r}): {result['rationale']!r}"
+        )
