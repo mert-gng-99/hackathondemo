@@ -115,7 +115,14 @@ class BBBPredictResponse(BaseModel):
 
 class MRIPredictRequest(BaseModel):
     """Single-subject MRI image prediction request."""
-    input_path: str = Field(..., description="Path to one .nii or .nii.gz MRI volume")
+    input_path: str = Field(
+        ...,
+        description=(
+            "Path to MRI input. With MRI_MODEL_KIND=volumetric_onnx (default), "
+            "expects a .nii/.nii.gz volume. With MRI_MODEL_KIND=resnet18_2d, "
+            "expects a 2D image (.png/.jpg)."
+        ),
+    )
     target_shape: tuple[int, int, int] = Field(
         (64, 64, 64),
         description="Model preprocessing resize target as (D, H, W)",

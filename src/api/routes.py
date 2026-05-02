@@ -319,25 +319,44 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
 
 @predict_router.post("/mri", response_model=MRIPredictResponse)
 def predict_mri(req: MRIPredictRequest) -> MRIPredictResponse:
-    """Predict from one MRI NIfTI image using an externally-trained ONNX model."""
-    artifact = _mri_model_path()
+    """Predict from one MRI image. Backend selected by MRI_MODEL_KIND env.
+
+    - `volumetric_onnx` (default): NIfTI volume + externally-trained ONNX.
+    - `resnet18_2d`: 2D image (.png/.jpg) + PyTorch state_dict, 4-class
+      Alzheimer's classifier (MildDemented/ModerateDemented/NonDemented/VeryMildDemented).
+    """
+    from src.models import mri_selector
+
+    kind = mri_selector.current_kind()
+    if kind == "resnet18_2d":
+        artifact = Path(os.environ.get(
+            "MRI_MODEL_PATH_2D", "data/processed/mri_dl_2d/best_model.pt",
+        ))
+    else:
+        artifact = _mri_model_path()
+
     if not artifact.exists():
         raise HTTPException(
             status_code=503,
             detail=(
-                f"MRI model artifact not available at {artifact}. "
-                "Export the trained volumetric model to ONNX and place it there, "
-                "or set MRI_MODEL_PATH."
+                f"MRI model artifact not available at {artifact} (kind={kind}). "
+                "Drop the trained checkpoint at this path, or override the path "
+                "via MRI_MODEL_PATH (3D ONNX) or MRI_MODEL_PATH_2D (2D resnet18)."
             ),
         )
     try:
-        model = mri_model.load(artifact)
-        pred = mri_model.predict_nifti(
-            model,
-            Path(req.input_path),
-            target_shape=req.target_shape,
-            label_names=req.label_names,
-        )
+        if kind == "resnet18_2d":
+            pred = mri_selector.predict(
+                input_path=Path(req.input_path),
+                checkpoint_path=artifact,
+            )
+        else:
+            pred = mri_selector.predict(
+                input_path=Path(req.input_path),
+                checkpoint_path=artifact,
+                target_shape=tuple(req.target_shape),
+                label_names=tuple(req.label_names) if req.label_names else None,
+            )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
