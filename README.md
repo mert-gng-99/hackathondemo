@@ -25,7 +25,7 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 
 **4.** Adapt-Over-Time is built in: each FastAPI worker keeps a rolling 100-prediction window; the trailing median is z-scored against the train-time confidence distribution and surfaced both in the API response and the UI ("trailing-100 confidence median is +1.42σ from training distribution — mild distribution shift").
 
-**5.** Current verification: 242 passed, 2 skipped. Demo lifelines (`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`, `BBB_MODEL_PATH`, `MRI_MODEL_PATH`) keep the system usable when MLflow, OpenRouter, or model artifacts are unavailable.
+**5.** Current verification: 330 passed, 2 skipped. Demo lifelines (`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`, `BBB_MODEL_PATH`, `MRI_MODEL_PATH`, `MRI_MODEL_PATH_2D`, `EEG_CLF_ARTIFACT`, `CLINICAL_RAG_INDEX_PATH`) keep the system usable when MLflow, OpenRouter, or model artifacts are unavailable.
 
 ## Status
 
@@ -40,6 +40,8 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 | 7 | Final 5% (Drift, Traceability & Agents) | Per-worker drift z-score + MLflow provenance badge + `POST /explain/bbb` (LLM + template fallback) + AI Assistant tab | Shipped |
 | 8 | Grand Finale (Multi-Modal Agents, Track 5 & Public Deploy) | Multi-modal explainers + experiments + deploy surface | Shipped |
 | 9 | Agent/RAG hardening + MRI DL decision layer | Guarded orchestration + `POST /predict/mri` ONNX surface | Shipped — 242 passed, 2 skipped |
+| 10 | Multi-modal fusion engine | `POST /fusion/predict` + `run_fusion` agent tool — MRI + EEG + clinical scores → per-disease confidence with attribution | Shipped — 295 passed, 1 skipped |
+| 11 | External assets integration | 2D resnet18 MRI Alzheimer's path · TF-IDF clinical RAG with TR query expansion · stub-able EEG pretrained classifier | Shipped — 330 passed, 2 skipped |
 
 ### Fusion Engine
 
@@ -54,6 +56,60 @@ heuristic — adjust there. **BBB is intentionally NOT a fusion modality**:
 it is a researcher-side concern (drug permeability) and stays decoupled
 from disease classification.
 
+### MRI Deep-Learning Backends
+
+The MRI prediction route supports two backends, selected via env at request time:
+
+- `MRI_MODEL_KIND=volumetric_onnx` (default). Loads an ONNX volumetric model
+  from `MRI_MODEL_PATH` (default `data/processed/mri_model.onnx`). Input:
+  `.nii` / `.nii.gz`. Two-class output by default (`control`, `abnormal`).
+- `MRI_MODEL_KIND=resnet18_2d`. Loads a PyTorch state_dict from
+  `MRI_MODEL_PATH_2D` (default `data/processed/mri_dl_2d/best_model.pt`).
+  Input: 2D image (`.png` / `.jpg`). 4-class Alzheimer's classifier:
+  `MildDemented`, `ModerateDemented`, `NonDemented`, `VeryMildDemented`.
+  Trainer's BEST_PARAMS bake in: `image_size=160`, ImageNet normalisation,
+  resnet18 backbone with a 4-class head.
+
+The Streamlit `Predict` tab auto-adapts its form to the active backend.
+Switch backends without restarting workers — env is read on each request.
+
+### Clinical Corpus (TF-IDF, Turkish + English)
+
+A second RAG index covers 14 peer-reviewed PDFs (Alzheimer's, Parkinson's,
+lifestyle, nutrition, exercise) using TF-IDF + sklearn. Source PDFs at
+`data/external_rag/clinical_pdfs/` (gitignored — copy from the team
+shared drive); pre-built index at `data/external_rag/index/rag_index.pkl`.
+
+Agent invocation:
+
+```python
+retrieve_context(query="egzersiz Alzheimer feedback", corpus="clinical", k=5)
+```
+
+Local CLI smoke:
+
+```bash
+python scripts/clinical_rag_smoke.py "egzersiz Alzheimer feedback"
+```
+
+The Turkish keywords `alzheimer`, `parkinson`, `egzersiz`, `beslenme`,
+`tani`, `tedavi`, `risk`, `unutkanlik`, `titreme`, `demans` auto-expand
+to English equivalents so Turkish queries hit English chunks.
+
+### EEG Pretrained Classifier (stub-able for demo)
+
+`POST /predict/eeg` runs an sklearn-style classifier (any `predict_proba`
+interface) on a feature vector and returns probability + attribution. The
+artifact loads from `data/processed/eeg_clf.joblib` (override via
+`EEG_CLF_ARTIFACT`). Default labels are `(control, alzheimers)` — override
+via `EEG_CLF_LABELS=label0,label1,...`.
+
+For the hackathon demo a synthetic stub
+(`tests/fixtures/build_dummy_eeg_clf.py`) is acceptable — drop the real
+`.joblib` at the artifact path to swap in production weights with **zero
+code changes**. The fusion engine consumes this prediction as the `eeg`
+modality automatically.
+
 ## Quick Start
 
 **Prerequisite:** Python 3.10–3.12. The pinned `requirements.txt` has no cp313+ wheels;
@@ -63,7 +119,7 @@ from disease classification.
 # 1. Create venv and install
 python3.12 -m venv .venv312 && source .venv312/bin/activate && pip install -r requirements.txt
 
-# 2. Verify — current full suite: 242 passed, 2 skipped
+# 2. Verify — current full suite: 330 passed, 2 skipped
 pytest -v
 
 # 3. Smoke run with the bundled 6-row fixture
