@@ -305,3 +305,50 @@ deterministic template path for a fully-reproducible demo.
 
 The README's YAML front-matter declares the Space metadata
 (SDK=docker, port=7860, app_file=src/frontend/app.py).
+
+## 15. Orchestrator Agent Surface
+
+`src/agents/orchestrator.py` exposes a single-agent function-calling
+loop over the openai SDK (no LangChain / framework dep). The agent
+holds 4 tools, defined in `src/agents/tools.py`:
+
+- `run_bbb_pipeline(smiles, top_k)` — wraps `POST /predict/bbb`
+- `run_eeg_pipeline(input_path)` — wraps `POST /pipeline/eeg`
+- `run_mri_pipeline(input_dir, sites_csv)` — wraps `POST /pipeline/mri`
+- `retrieve_context(query, k)` — wraps `src/rag/retrieve.py`
+
+The system prompt (`src/agents/prompts.py:ORCHESTRATOR_SYSTEM_PROMPT`)
+locks the workflow: pick exactly one pipeline → run it → formulate a
+focused retrieval query → call retrieve_context → synthesize a
+3-5 sentence response that cites at least one chunk. Language of the
+final response is mirrored from the user's question.
+
+`POST /agent/run` is the public surface. Default model is
+`google/gemini-2.0-flash-exp:free` on OpenRouter (function-calling
+support verified). Override via `NEUROBRIDGE_AGENT_MODEL` env var.
+Returns 503 when `OPENROUTER_API_KEY` is unset.
+
+Diagnostics: `GET /diag/agent` returns key presence, configured model,
+RAG index status (chunk count), and the registered tool names.
+
+## 16. RAG Surface
+
+`src/rag/` is the retrieval layer. Stack: `fastembed`
+(`BAAI/bge-small-en-v1.5`, 384-dim, ONNX, no torch dep) for
+embeddings + `faiss-cpu` (`IndexFlatIP` after L2-norm = cosine) for
+vector search.
+
+Knowledge base lives at `data/knowledge_base/` (gitignored;
+user-supplied `.md` / `.txt` / `.pdf`). Build the FAISS index with:
+
+    python -m src.rag.ingest [<input_dir> [<output_dir>]]
+
+Defaults: input=`data/knowledge_base/`, output=`data/processed/faiss_index/`.
+The Dockerfile runs this at build time so deployed Spaces start with
+a populated index. Empty KB → empty index → `retrieve_context`
+returns 0 chunks; the agent surfaces this and answers from the
+pipeline result alone.
+
+`tests/fixtures/kb_sample/` ships 3 seed markdown files (Lipinski,
+ComBat, MNE+ICA) — these double as test fixtures and as the demo
+seed if no user-supplied PDFs are added.

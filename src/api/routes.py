@@ -18,6 +18,9 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from src.api.schemas import (
+    AgentRunRequest,
+    AgentRunResponse,
+    AgentToolTraceItem,
     BBBExplainRequest,
     BBBExplainResponse,
     BBBPredictRequest,
@@ -500,3 +503,63 @@ def diff_runs(req: RunDiffRequest) -> RunDiffResponse:
             )
         )
     return RunDiffResponse(rows=rows)
+
+
+# --- Agent router ----------------------------------------------------------
+
+agent_router = APIRouter(prefix="/agent")
+
+
+_DEFAULT_RAG_INDEX_DIR = Path("data/processed/faiss_index")
+_AGENT_MODEL_ENV = "NEUROBRIDGE_AGENT_MODEL"
+_AGENT_DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
+
+
+def _build_orchestrator():
+    """Construct the default orchestrator. Patchable in tests."""
+    from openai import OpenAI
+
+    from src.agents.orchestrator import Orchestrator
+    from src.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
+    from src.agents.tools import build_default_tools
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENROUTER_API_KEY not set; agent surface unavailable.",
+        )
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+        timeout=30.0,
+    )
+    rag_dir = _DEFAULT_RAG_INDEX_DIR if _DEFAULT_RAG_INDEX_DIR.exists() else None
+    tools = build_default_tools(rag_index_dir=rag_dir)
+    model = os.environ.get(_AGENT_MODEL_ENV, _AGENT_DEFAULT_MODEL)
+    return Orchestrator(
+        llm_client=client,
+        tools=tools,
+        system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+        model=model,
+        max_steps=5,
+    )
+
+
+@agent_router.post("/run", response_model=AgentRunResponse)
+def run_agent(req: AgentRunRequest) -> AgentRunResponse:
+    """Run the orchestrator on `user_input`. Picks a pipeline + grounds via RAG."""
+    orch = _build_orchestrator()
+    user_text = req.user_input
+    if req.user_question:
+        user_text = f"{req.user_input}\n\nUser question: {req.user_question}"
+    result = orch.run(user_text)
+    return AgentRunResponse(
+        text=result.text,
+        trace=[
+            AgentToolTraceItem(name=t.name, args=t.args, result=t.result, error=t.error)
+            for t in result.trace
+        ],
+        model=result.model,
+        finish_reason=result.finish_reason,
+    )

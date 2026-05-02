@@ -228,3 +228,27 @@ class RunDiffRow(BaseModel):
 class RunDiffResponse(BaseModel):
     """Response for POST /experiments/diff: side-by-side metric/param diff."""
     rows: list[RunDiffRow]
+
+
+# --- Agent surface (orchestrator + RAG) ------------------------------------
+
+class AgentRunRequest(BaseModel):
+    """User input to the orchestrator."""
+    user_input: str = Field(..., min_length=1, description="SMILES, file path, or directory path")
+    user_question: str | None = Field(
+        None, description="Optional natural-language question to language-match the response"
+    )
+
+
+class AgentToolTraceItem(BaseModel):
+    name: str
+    args: dict = Field(default_factory=dict)
+    result: dict | None = None
+    error: str | None = None
+
+
+class AgentRunResponse(BaseModel):
+    text: str
+    trace: list[AgentToolTraceItem] = Field(default_factory=list)
+    model: str | None = None
+    finish_reason: str = "complete"

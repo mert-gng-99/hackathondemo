@@ -225,6 +225,11 @@ finishes in under 4 seconds on a 2024 laptop.
 - **New surfaces:** `POST /explain/eeg`, `POST /explain/mri`, `GET /experiments/runs`, `POST /experiments/diff`
 - **New deploy artifacts:** `Dockerfile.hf`, `supervisord.conf`
 - **LLM hardening (post-Day 8):** real OpenRouter LLM is now the default in deployed Spaces — `Dockerfile`/`Dockerfile.hf` no longer hard-code `NEUROBRIDGE_DISABLE_LLM=1`. Free-tier fallback chain (10 models, smartest → smallest) in [`src/llm/explainer.py`](src/llm/explainer.py), 401/400 status classification, and language-matching / intent-split prompt. Diagnostic endpoint `GET /diag/openrouter` ([`src/api/main.py`](src/api/main.py)) + Streamlit sidebar "🔧 Diagnose LLM" button. Live verification helper: [`scripts/diagnose_openrouter.py`](scripts/diagnose_openrouter.py).
+- **Orchestrator agent (Task 13):** [`src/agents/orchestrator.py`](src/agents/orchestrator.py), [`src/agents/tools.py`](src/agents/tools.py), [`src/agents/prompts.py`](src/agents/prompts.py)
+- **RAG layer:** [`src/rag/`](src/rag/) — chunker, embedder (fastembed), FAISS store, retriever, ingest CLI
+- **Agent endpoint:** `POST /agent/run` (orchestrator + RAG); diagnostic at `GET /diag/agent`
+- **Streamlit Agent tab:** "🤖 Agent" tab in [`src/frontend/app.py`](src/frontend/app.py) — input box + decision-trace expander
+- **RAG knowledge base:** drop `.md`/`.pdf` into [`data/knowledge_base/`](data/knowledge_base/) — see its README
 
 ## Day 7 — Demo Recipe
 

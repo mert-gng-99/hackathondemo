@@ -11,6 +11,7 @@ from src.api.routes import (
     predict_router,
     explain_router,
     experiments_router,
+    agent_router,
 )
 from src.api.schemas import HealthResponse
 
@@ -24,6 +25,7 @@ app.include_router(pipeline_router)
 app.include_router(predict_router)
 app.include_router(explain_router)
 app.include_router(experiments_router)
+app.include_router(agent_router)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -100,3 +102,40 @@ def diag_openrouter() -> dict:
         out["probe"] = {"status": "ERR", "exception": type(e).__name__, "message": str(e)[:200]}
 
     return out
+
+
+@app.get("/diag/agent")
+def diag_agent() -> dict:
+    """Reachability probe for the orchestrator agent surface.
+
+    Reports key presence (length + 12-char prefix only — never the full
+    secret), the configured agent model, knowledge-base index status,
+    and the registered tool names.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    from src.agents.tools import build_default_tools
+
+    key = _os.environ.get("OPENROUTER_API_KEY") or ""
+    model = _os.environ.get("NEUROBRIDGE_AGENT_MODEL", "google/gemini-2.0-flash-exp:free")
+
+    rag_dir = _Path("data/processed/faiss_index")
+    rag_status: dict = {"index_dir": str(rag_dir), "exists": False, "chunk_count": 0}
+    if (rag_dir / "index.bin").exists() and (rag_dir / "chunks.json").exists():
+        rag_status["exists"] = True
+        try:
+            import json as _json
+            rag_status["chunk_count"] = len(_json.loads((rag_dir / "chunks.json").read_text()))
+        except Exception as e:
+            rag_status["error"] = f"chunks.json unreadable: {e}"
+
+    tools = build_default_tools(rag_index_dir=rag_dir if rag_status["exists"] else None)
+    return {
+        "has_key": bool(key),
+        "key_len": len(key),
+        "key_prefix": key[:12] if key else None,
+        "agent_model": model,
+        "rag": rag_status,
+        "tool_names": [t.name for t in tools],
+    }
