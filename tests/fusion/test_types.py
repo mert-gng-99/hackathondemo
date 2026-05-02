@@ -30,6 +30,20 @@ class TestModalityPrediction:
         with pytest.raises(ValidationError):
             ModalityPrediction(label_text="x", label=0, confidence=0.5, probabilities=[])
 
+    def test_rejects_probability_above_one(self) -> None:
+        with pytest.raises(ValidationError):
+            ModalityPrediction(
+                label_text="x", label=0, confidence=0.5,
+                probabilities=[{"label_text": "x", "probability": 1.5}],
+            )
+
+    def test_rejects_negative_label(self) -> None:
+        with pytest.raises(ValidationError):
+            ModalityPrediction(
+                label_text="x", label=-1, confidence=0.5,
+                probabilities=[{"label_text": "x", "probability": 0.5}],
+            )
+
 
 class TestClinicalScores:
     def test_all_optional(self) -> None:
@@ -39,6 +53,14 @@ class TestClinicalScores:
     def test_rejects_out_of_range_mmse(self) -> None:
         with pytest.raises(ValidationError):
             ClinicalScores(mmse=42.0)
+
+    def test_rejects_negative_mmse(self) -> None:
+        with pytest.raises(ValidationError):
+            ClinicalScores(mmse=-1.0)
+
+    def test_rejects_out_of_range_updrs(self) -> None:
+        with pytest.raises(ValidationError):
+            ClinicalScores(updrs=200.0)
 
 
 class TestFusionInputOutput:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class ModalityClassProb(BaseModel):
@@ -13,7 +13,6 @@ class ModalityClassProb(BaseModel):
 
 class ModalityPrediction(BaseModel):
     """One modality's classifier output (MRI or EEG)."""
-    model_config = ConfigDict(protected_namespaces=())
 
     label_text: str
     label: int = Field(..., ge=0)
