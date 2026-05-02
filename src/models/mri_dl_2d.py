@@ -8,6 +8,7 @@ code paths don't care which backend produced the prediction.
 """
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -47,17 +48,36 @@ def _build_resnet18_4class() -> nn.Module:
 
 
 def load(path: Path) -> nn.Module:
-    """Load checkpoint. Supports state_dict (preferred) or full pickled model."""
+    """Load checkpoint. Supports state_dict (preferred) or full pickled model.
+
+    Tries `weights_only=True` first (safe; refuses arbitrary pickle opcodes);
+    falls back to `weights_only=False` only when the artifact turns out to be
+    a full `nn.Module` pickle (rare). The fallback path executes pickle code
+    and should only be used with trusted artifacts.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"MRI 2D checkpoint not found: {path}")
-    obj = torch.load(str(path), map_location="cpu", weights_only=False)
+    try:
+        obj = torch.load(str(path), map_location="cpu", weights_only=True)
+    except (pickle.UnpicklingError, RuntimeError) as e:
+        logger.warning(
+            "MRI 2D checkpoint at %s is not a state_dict (weights_only=True failed: %s); "
+            "falling back to weights_only=False — only safe with trusted artifacts.",
+            path, e,
+        )
+        obj = torch.load(str(path), map_location="cpu", weights_only=False)
     if isinstance(obj, nn.Module):
         model = obj
-    else:
+    elif isinstance(obj, dict):
         model = _build_resnet18_4class()
         clean = {k.removeprefix("module."): v for k, v in obj.items()}
         model.load_state_dict(clean, strict=True)
+    else:
+        raise ValueError(
+            f"MRI 2D checkpoint at {path} has unexpected type {type(obj).__name__}; "
+            "expected state_dict (dict) or a full nn.Module pickle."
+        )
     model.eval()
     return model
 
