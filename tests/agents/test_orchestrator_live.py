@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 import pytest
-from openai import OpenAI
+from openai import NotFoundError, OpenAI
 
 from src.agents.orchestrator import Orchestrator
 from src.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
@@ -65,7 +65,14 @@ class TestOrchestratorLive:
             model=os.environ.get("NEUROBRIDGE_AGENT_MODEL", _DEFAULT_MODEL),
             max_steps=5,
         )
-        result = orch.run("CCO")
+        try:
+            result = orch.run("CCO")
+        except NotFoundError as e:
+            # Free-tier model availability churns on OpenRouter — a 404 here
+            # means the configured model isn't on this account, not that the
+            # orchestrator code is broken. Verify with `GET /diag/agent` and
+            # override via NEUROBRIDGE_AGENT_MODEL.
+            pytest.skip(f"agent model unavailable on OpenRouter: {e}")
         # Soft assertions — model behavior varies but the workflow shape is fixed.
         assert result.finish_reason == "complete", f"got {result.finish_reason}, trace={result.trace}"
         tool_names = [t.name for t in result.trace]
