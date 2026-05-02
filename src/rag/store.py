@@ -32,7 +32,7 @@ class FAISSStore:
             )
         if vectors.shape[0] == 0:
             return
-        v = np.asarray(vectors, dtype=np.float32)
+        v = np.array(vectors, dtype=np.float32, copy=True)
         faiss.normalize_L2(v)
         self._index.add(v)
         self._chunks.extend(chunks)
@@ -40,7 +40,7 @@ class FAISSStore:
     def search(self, query: np.ndarray, k: int = 5) -> list[tuple[dict[str, Any], float]]:
         if len(self._chunks) == 0:
             return []
-        q = np.asarray(query, dtype=np.float32)
+        q = np.array(query, dtype=np.float32, copy=True)
         if q.ndim == 1:
             q = q[np.newaxis, :]
         faiss.normalize_L2(q)

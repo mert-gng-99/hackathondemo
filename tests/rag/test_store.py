@@ -52,3 +52,19 @@ class TestFAISSStore:
     def test_search_on_empty_store_returns_empty(self) -> None:
         store = FAISSStore(dim=4)
         assert store.search(_rand_vecs(1)[0], k=5) == []
+
+    def test_add_does_not_mutate_caller_vectors(self) -> None:
+        store = FAISSStore(dim=4)
+        vecs = _rand_vecs(3)
+        original = vecs.copy()
+        store.add(vecs, [{"text": f"c{i}"} for i in range(3)])
+        # Caller's array must be unchanged after add() (faiss.normalize_L2 is in-place)
+        assert np.allclose(vecs, original), "store.add() mutated caller's vectors"
+
+    def test_search_does_not_mutate_caller_query(self) -> None:
+        store = FAISSStore(dim=4)
+        store.add(_rand_vecs(3), [{"text": f"c{i}"} for i in range(3)])
+        query = _rand_vecs(1)[0]
+        original_query = query.copy()
+        store.search(query, k=2)
+        assert np.allclose(query, original_query), "store.search() mutated caller's query"
