@@ -28,6 +28,7 @@ mlartifacts/
 
 # Claude Code / agent tooling
 .sixth/
+.worktrees/
 
 # IDE
 .idea/
