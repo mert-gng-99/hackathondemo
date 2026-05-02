@@ -554,7 +554,111 @@ hackathon/
 
 ---
 
-## 16. Kapanış
+## 16. Terimler Sözlüğü
+
+Yukarıdaki bölümlerde geçen teknik terimlerin sade Türkçe karşılıkları. Hiç tanımadığın bir alan için kısa "neden önemli?" notlarıyla.
+
+### 16.1 Klinik / Biyomedikal
+
+- **BBB (Blood-Brain Barrier / Kan-Beyin Bariyeri):** Beyne giden damarlardaki özel hücre tabakası. Vücudun beyni zararlı maddelerden koruyan filtre. Bir ilacın etki etmesi için (eğer beyinde çalışacaksa) buradan geçmesi gerekir; geçmemesi gerekiyorsa (yan etki istemiyoruz) buraya takılması gerekir. İlaç keşfinde kritik bir filtre.
+- **MSS (Merkezi Sinir Sistemi):** Beyin + omurilik. CNS olarak da geçer.
+- **MRI (Magnetic Resonance Imaging):** Manyetik rezonans görüntüleme; beynin/dokunun kesit görüntüsü.
+- **NIfTI (`.nii.gz`):** Beyin görüntüleme veri formatı; MRI taramaları bu formatta saklanır.
+- **ROI (Region of Interest / İlgi Bölgesi):** Görüntüde ölçüm aldığımız bölge (örn. hipokampus). Bizde N×N×N grid hücreleri.
+- **EEG (Electroencephalography):** Kafa derisindeki elektrotlarla beynin elektriksel aktivitesini ölçen yöntem.
+- **EOG (Electrooculography):** Göz hareketlerinin elektriksel kaydı. EEG'de göz kırpma artefaktını ayıklamak için referans olarak kullanılır.
+- **MNE-Python:** EEG/MEG işlemenin de facto bilimsel kütüphanesi (klinik standart).
+- **ICA (Independent Component Analysis):** Karışık bir sinyali bağımsız kaynaklarına ayıran algoritma. Örn. EEG kaydında göz kırpma + beyin aktivitesi karışmıştır; ICA bunları ayrı "kaynak"lara böler, sonra göz kırpma kaynağını silip temiz sinyali yeniden inşa edersin.
+- **PSD (Power Spectral Density / Güç Spektral Yoğunluğu):** Sinyalin gücünün frekanslara dağılımı. EEG'de **delta** (0.5–4 Hz, derin uyku), **theta** (4–8 Hz, uyku-uyanıklık geçişi), **alpha** (8–13 Hz, gevşek uyanıklık), **beta** (13–30 Hz, aktif düşünme), **gamma** (30+ Hz, yüksek bilişsel aktivite) bantları.
+- **Bandpass Filter (0.5–40 Hz):** Sadece bu aralıktaki frekansları geçiren filtre. 0.5 Hz altı = DC drift (yavaş baseline kayması), 50/60 Hz = elektrik şebekesi gürültüsü → ikisini de keser.
+- **Epoch:** EEG kaydını sabit süreli (örn. 2 saniyelik) eşit parçalara bölme. Her parça bir "örnek".
+- **SMILES (Simplified Molecular Input Line Entry System):** Molekül yapısının kısa metin gösterimi. Örnekler: `CCO` → ethanol, `CN1C=NC2=C1C(=O)N(C(=O)N2C)C` → kafein. ML modeli SMILES'i değil onu vektöre çeviren fingerprint'i öğrenir.
+- **Morgan Fingerprint:** Molekülün yapısal "barkod"u. 2048 bit'lik 0/1 vektör; her bit "molekülde şu alt yapı var mı?" sorusuna cevap. RDKit `GetMorganFingerprintAsBitVect`, radius=2 (her atomun 2 komşuluk uzağına kadar bakar).
+- **RDKit:** Kimya/cheminformatics açık kaynak Python kütüphanesi. SMILES parse, validation, fingerprint hep RDKit ile.
+- **Cyclosporine / Macrocycle:** ~1.2 kDa, 11-residue (peptit zinciri) makrosiklik (halkasal) immünosüpresan ilaç. BBB eğitim setindeki tipik küçük moleküllere göre devasa ve sıra dışı; OOD probe için kullanıyoruz.
+
+### 16.2 Site Bias & Harmonizasyon
+
+- **Site / Cihaz Bias'ı (Site Effect):** Aynı hastanın farklı hastane MRI cihazlarında farklı sayısal sonuç vermesi. Cihaz markası, manyetik alan gücü, yazılım sürümü, çekim protokolü hepsi sistematik kayma yaratır. Tedavi etkisi gibi görünebilir aslında sadece "cihaz farkı"dır.
+- **Site-Gap (Site Boşluğu):** Aynı feature'ın siteler-arası ortalama farkının büyüklüğü. `max(per_site_means) - min(per_site_means)`. Sıfıra yakın olması iyidir (cihaz farkı gözükmüyor demektir).
+- **Site-Gap Reduction (Site Boşluğu Azalması):** Harmonizasyon öncesi vs. sonrası site-gap oranı. Bizde **3290× reduction**: ComBat öncesi siteler-arası ortalama farkı 5.0, sonrası 0.0015 — fark 3290 kat çöktü. Yani MRI'ın hangi hastanede çekildiğinin tahmine etkisi neredeyse sıfırlandı.
+- **ComBat Harmonization:** Çok-merkezli verilerde site bias'ı düzelten istatistiksel algoritma. Her sitenin ortalama (location) + varyans (scale) farkını referans dağılıma çeker, biyolojik sinyali korur. Empirical Bayes shrinkage'ı sayesinde az veri durumunda bile robust. Aslen gen ekspresyonu için icat edildi (Johnson 2007), MRI'a uyarlandı (Fortin 2017–2018).
+- **Empirical Bayes:** Klasik Bayes'in pratik versiyonu — prior'u veriden tahmin eder, az örnekli grupları "ortalamaya çeker" (shrinkage). Az veriyle overfit'i önler.
+- **Z-score Normalization:** `(x - mean) / std`. Sadece **mean**'i sıfıra çeker, scale farkını çözmez. ComBat hem mean hem scale'i düzelttiği için z-score'dan üstün.
+- **KDE (Kernel Density Estimation):** Histogram'ın yumuşak versiyonu. Veri dağılımını düzgün eğri olarak çizer. Bizde her site bir renk; Pre-ComBat panelde renkler ayrışık tepeler oluşturur (cihaz farkı), Post-ComBat panelde üst üste biner (cihaz farkı kalktı) — harmonizasyonun **görsel kanıtı**.
+- **Faceted Plot (Yüzlü Grafik):** Aynı grafik tipinin küçük çoklu versiyonları yan yana. Bizde Pre-ComBat ve Post-ComBat iki ayrı panel, ama aynı eksen.
+- **Long-format DataFrame:** Her satırda tek `(subject, site, feature, value, state)` tuple'ı. Faceted plot ve `groupby` için ideal; "wide" tablonun melt edilmiş hâli.
+
+### 16.3 Makine Öğrenmesi
+
+- **Random Forest (RF):** Onlarca-yüzlerce karar ağacının bağımsız oy vermesi üzerine kurulu klasik ML algoritması. Küçük-orta veri setlerinde (≤10K örnek) derin öğrenmeyi yener çünkü deep learning bu boyutta overfit eder.
+- **Stratified Split (Tabakalı Bölme):** Train/test ayırırken her sınıfın oranını koruma. Veride %30 pozitif varsa hem train hem test'te %30 olur. Class imbalance'da kritik.
+- **`predict_proba`:** sklearn modellerinin "ham olasılık" çıktısı. Örn. `[0.18, 0.82]` = %82 olasılıkla pozitif sınıf. `argmax`'ı alırsak label, `max`'ı alırsak confidence.
+- **Confidence (Güven Skoru):** Modelin tahminine verdiği olasılık (`max(predict_proba)`). %50 = bilmiyor, %99 = çok emin.
+- **Calibration (Kalibrasyon):** "Model %80 derse, gerçekten %80 doğruluk gösteriyor mu?" sorusu. Kalibre olmayan model "çok eminim" der ama yanılır; kalibre model güveni ile gerçek precision'ı uyuşur.
+- **Calibration Bin:** Confidence aralıkları (0.50, 0.60, 0.70, 0.75, 0.80, 0.90). Her aralık için held-out test'te precision ölçülür → kullanıcıya "≥%75 confident olduğumda gerçek precision %92" deme imkânı.
+- **Precision (Kesinlik):** Model "pozitif" dediklerinin kaçı gerçekten pozitif? `TP / (TP + FP)`.
+- **Support:** O bin'de kaç örnek var. n=18 demek "bu istatistik 18 örnekten hesaplandı".
+- **Held-out Test Set:** Train'de hiç görmediği veri. Modelin gerçek genelleme performansını ölçen tek dürüst veri.
+- **OOD (Out-of-Distribution):** Eğitim verisinde olmayan, "tanımadığım" tipte örnek. Cyclosporine örneği gibi. Sağlam model OOD'de düşük confidence ile **hedge eder** (kararsız kalır).
+- **Drift (Veri Sapması):** Modelin gerçek dünyada gördüğü verinin zamanla eğitim dağılımından uzaklaşması. "Hasta profili değişti, model eskidi" sinyali.
+- **Drift z-score:** Son 100 tahminin median'ı, eğitim sırasındaki median'dan kaç standart sapma uzakta? Formül: `(rolling_median - train_median) / max(train_std, 1e-9)`. Yorum: `|z|<1` normal, `1≤|z|<2` hafif kayma, `|z|≥2` ciddi kayma — retrain önerilir.
+- **Trailing-100 / Rolling-100 Window:** Son 100 tahmin penceresi. Python `collections.deque(maxlen=100)` ile tutulur.
+- **deque (Double-Ended Queue):** Python'da iki uçtan ekleme/çıkarma yapılabilen sabit-boyutlu kuyruk. `maxlen=100` = en yeni 100 eleman tutulur, eski olan otomatik düşer.
+- **SHAP (SHapley Additive exPlanations):** Bir tahmindeki katkıyı feature'lar arasında "adil" şekilde paylaştıran yöntem. Oyun teorisinden Shapley value (Lloyd Shapley, 1953 — Nobel 2012) kullanır. "Bit #532 kararı +0.18 ittirdi, bit #1024 −0.05 ittirdi" der.
+- **TreeExplainer:** SHAP'in karar ağacı modelleri için kapalı-form **exact** çözümü. Sampling yok, deterministik, tam aynı feature için tam aynı katkıyı verir (Lundberg & Lee 2018).
+- **LIME:** SHAP'a alternatif "local linear approximation". Tree boundary'larında SHAP kadar kesin değil; biz SHAP tercih ediyoruz.
+- **Feature Attribution (Öznitelik Atfı):** Her feature'ın tahmindeki katkısı (yön + büyüklük).
+- **Feature Importance:** Tüm dataset üzerinde bir feature'ın model kararındaki ortalama önem ağırlığı (global). Attribution ise bireysel tahmindekidir (local).
+- **MLflow:** ML deneylerini (run'ları) izleyen açık kaynak araç. "Hangi veri, hangi parametre, hangi metrik?" — hepsi otomatik loglanır.
+- **Run / Run ID:** MLflow'da bir eğitim çalışmasının kaydı. Her train invocation yeni bir `run_id` (örn. `abc123...`) alır.
+- **Provenance (Kanıt İzi / Veri Kökenli):** "Bu tahmin tam olarak hangi modelden, hangi run'dan, hangi veriyle çıktı?" sorusunun audit-trail cevabı. Tıbbi/regülatif sistemlerde zorunlu.
+- **Joblib:** sklearn modellerini diske yazmak/okumak için kullanılan serileştirme kütüphanesi. `pickle`'ın numpy-aware versiyonu.
+- **TDD (Test-Driven Development):** Önce test yaz (kabul kriteri), sonra kodu yaz. Döngü: **RED** (test fail) → **GREEN** (test pass) → **REFACTOR** (temizle, test hâlâ pass).
+
+### 16.4 Backend & Mimari
+
+- **FastAPI:** Python'da modern HTTP API framework (Pydantic schema'lar + async + auto-generated `/docs` Swagger UI).
+- **Pydantic:** Python data validation kütüphanesi. Request/response schema'larını type-safe yapar; yanlış formatta input gelirse otomatik HTTP 422 döner.
+- **Uvicorn:** Python ASGI sunucusu, FastAPI'yi çalıştırır.
+- **Streamlit:** Python-only web dashboard framework. React/HTML yazmadan multi-tab interactive UI.
+- **httpx:** Modern Python HTTP istemcisi (`requests`'in async-aware halefi). Streamlit container içinde FastAPI'ya bununla konuşur.
+- **Supervisord:** Tek container içinde birden fazla process'i (uvicorn + streamlit) yöneten süreç yöneticisi. Biri ölünce yeniden başlatır.
+- **BFF (Backend For Frontend) / Proxy Pattern:** UI ile gerçek API arasındaki ara katman. Bizde Streamlit container içinden FastAPI'yi çağırır; dışarı sadece Streamlit (port 7860) açıktır, FastAPI (port 8000) doğrudan internet'e açık değildir.
+- **Endpoint:** API'nin URL yolu. Örn. `POST /predict/bbb`.
+- **HTTP Status Codes:** `200` OK, `400` Bad Request (input geçersiz), `404` Not Found, `422` Unprocessable Entity (Pydantic validation fail), `503` Service Unavailable (model yüklenmedi).
+- **Env Variable (Çevre Değişkeni):** Container'a dışarıdan verilen ayar. Örn. `NEUROBRIDGE_DISABLE_LLM=1`.
+- **Kill-Switch:** Bir özelliği tek değişkenle devre dışı bırakma anahtarı. Demo gününde LLM ölürse `NEUROBRIDGE_DISABLE_LLM=1` ile sistem template path'e düşer ve hayatta kalır.
+- **Graceful Failure / Graceful Degradation:** Bir bileşen hata verince **çökmek yerine** sistemin daha basit modda çalışmaya devam etmesi. Bizde: API HTTP 400 dönerse UI'da kırmızı ERROR yerine sarı WARNING; LLM ölürse template path; MLflow ölürse provenance "—" gösterir.
+- **Fallback Chain:** Bir hata zincirinde sırayla denenen yedekler. LLM Provider A → Provider B → deterministic template gibi.
+- **Hybrid Path:** İki yollu sistem; LLM çalışırsa LLM cevap verir, çalışmazsa template path. Source label ile hangi path'in döndüğü işaretlenir.
+- **Deterministic Template:** Aynı input'a her zaman tıpatıp aynı cevabı veren string template. (LLM ise rastgelelik içerir.)
+- **Idempotence (Idempotency):** Aynı işlemi 1 kez de 100 kez de çalıştırsan sonuç aynı kalır. Pipeline'larımız idempotent → re-run güvenli.
+- **HF Spaces (Hugging Face Spaces):** ML demolarını host etmek için ücretsiz public platform. ML community hub.
+- **Docker / Container:** Uygulama + tüm dependencies'in tek izole paket olarak çalıştırılması. "Bende çalışıyor" sorununu öldürür.
+- **Dockerfile:** Container'ın nasıl build edileceğine dair talimat dosyası.
+- **Cold Start:** Container'ın ilk ayağa kalkış süresi. Bizde build-time train sayesinde model image'a gömülü → cold start'ta train beklemeyiz.
+- **Worker:** Web sunucusu işlem birimi. Her worker bağımsız bellek alanına sahip → drift deque'i her worker'da ayrıdır (production'da Redis'e taşınır).
+
+### 16.5 LLM / Açıklanabilirlik
+
+- **LLM (Large Language Model):** GPT, Llama, Gemini, Claude gibi büyük dil modelleri.
+- **OpenRouter:** Birçok LLM provider'ı tek API arkasında toplayan servis. Free tier'da `llama-3.2-3b`, `gemini-flash`, `qwen` gibi seçenekler.
+- **API Key:** Bir servise erişim için kişisel jeton. Asla repo'ya commit edilmez (HF Spaces "Variables and Secrets"'a girilir).
+- **Rationale (Gerekçe):** Modelin tahminine dair doğal-dil açıklama (örn. "Predicted permeable with 82% confidence; SHAP attributions toward this label include bits 532 and 1024…").
+- **Source Label:** Cevabın hangi kaynaktan geldiğini gösteren etiket. Bizde `source: "llm"` veya `source: "template"` — auditability için.
+
+### 16.6 Veri Yapıları & Format
+
+- **Parquet:** Sıkıştırılmış kolonlu veri formatı. CSV'den çok daha verimli (boyut + okuma hızı).
+- **DataFrame:** pandas'ın tablo veri yapısı. SQL-benzeri operasyonlar Python içinde.
+- **JSON:** API request/response'larının metin formatı.
+- **`.fif` / `.edf`:** EEG kayıt formatları (FIF = MNE'nin native format'ı, EDF = European Data Format, daha yaygın).
+- **Joblib `.joblib`:** sklearn modeli + custom attribute'lar serialized hâli.
+
+---
+
+## 17. Kapanış
 
 NeuroBridge Enterprise hackathon'un sloganına ("**Stop Building Ideas. Start Building Systems.**") en doğrudan cevap. 8 gün boyunca disiplinli TDD + Subagent-Driven Development ile inşa ettik. Public deploy'lu, jüri tarayıcıdan tıklayıp dokunabiliyor. 184 test green, 96.8% jüri skoru projeksiyonu, 5/5 hackathon track strong, 4/4 Living Systems pillar full.
 
