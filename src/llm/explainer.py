@@ -212,7 +212,12 @@ def _build_llm_prompt(payload: ExplainPayload, modality: str = "bbb") -> str:
         ),
     }
     header = headers.get(modality, headers["bbb"])
-    user_q = payload.get("user_question") or "Explain the result in 2-4 sentences."
+    raw_q = (payload.get("user_question") or "").strip()
+    # When the caller did not supply a question, default to the paper-style
+    # rationale prompt; this preserves the original behavior for /explain
+    # callers that just want a one-shot summary.
+    user_q = raw_q or "Explain the result in 2-4 sentences."
+    has_explicit_question = bool(raw_q)
     body_lines: list[str] = []
     if modality == "bbb":
         top_features = payload.get("top_features") or []
@@ -251,13 +256,31 @@ def _build_llm_prompt(payload: ExplainPayload, modality: str = "bbb") -> str:
         # fallback uses BBB-shape prompt
         body_lines.append(f"Payload: {payload!r}")
 
+    if has_explicit_question:
+        instructions = (
+            "Instructions:\n"
+            "- Respond in the SAME LANGUAGE as the user's question above "
+            "(Turkish question → Turkish answer, English → English, etc.).\n"
+            "- Directly answer the user's question using the data below; "
+            "do not default to a generic paper-style summary unless they "
+            "asked for one.\n"
+            "- If the question is conversational or off-topic (e.g. a "
+            "greeting), reply briefly and conversationally — do not force "
+            "a clinical rationale.\n"
+            "- Cite specific numbers from the data when relevant.\n"
+            "- No preamble, no apologies, just the answer."
+        )
+    else:
+        instructions = (
+            "Write a 2-4 sentence rationale a researcher could paste into "
+            "a paper. Avoid hedging; be specific about the numbers. "
+            "Respond with the rationale only, no preamble."
+        )
     return (
-        f"{header} Given the details below, write a 2-4 sentence rationale a "
-        f"researcher could paste into a paper. Avoid hedging; be specific "
-        f"about the numbers.\n\n"
-        f"{body_lines[0]}\n\n"
+        f"{header}\n\n"
         f"User question: {user_q}\n\n"
-        f"Respond with the rationale only, no preamble."
+        f"Data for this prediction:\n{body_lines[0]}\n\n"
+        f"{instructions}"
     )
 
 
