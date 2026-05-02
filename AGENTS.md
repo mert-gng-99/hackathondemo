@@ -214,23 +214,50 @@ renders a one-line caption with a magnitude tag (in-band, mild,
 significant). Worker restart clears the deque; this is acceptable for
 demo and removes the audit-trail concern.
 
-## 11. LLM Explainer Surface (Day 7)
+## 11. LLM Explainer Surface (Day 7 + 9)
 
 `src/llm/explainer.py` is the single entry point for natural-language
 rationales. `explain(payload)` always returns `{rationale, source,
 model}`. The deterministic template path is the source of truth for
-tests; the LLM path is OpenRouter via the `openai==1.51.0` SDK using
-`meta-llama/llama-3.2-3b-instruct:free`. Two env knobs control the
-behavior:
+tests; the LLM path is OpenRouter via the `openai==1.51.0` SDK and
+walks a **smartest → smallest free-tier fallback chain**
+(`_DEFAULT_FREE_MODEL_CHAIN`, 10 ids — head: `inclusionai/ling-2.6-1t:free`).
+The chain is overridable at runtime via `OPENROUTER_FREE_MODELS`
+(comma-separated). Status-code classification:
+
+- `401` → key is bad → bail to template + actionable WARNING (rotate at
+  https://openrouter.ai/keys, enable free-model data-sharing at
+  https://openrouter.ai/settings/privacy).
+- `400` → prompt-shape mismatch on this model → advance to next.
+- `402 / 403 / 404 / 429 / 5xx` → advance to next.
+- Network/timeout → bail to template (switching models won't help).
+
+Two env knobs control the gate:
 
 - `OPENROUTER_API_KEY` — when absent, fallback to template.
 - `NEUROBRIDGE_DISABLE_LLM=1` — hard kill-switch; force template even
   if a key is set. Use this for demo days when you want fully
   deterministic, reproducible rationales.
 
+**Prompt design** (`_build_llm_prompt`): two intent modes. When the
+caller supplies `user_question`, the model is instructed to
+language-match (Turkish question → Turkish answer), answer the
+question directly (not a canned paper-style summary), and respond
+conversationally to off-topic / greeting questions. When no
+`user_question` is supplied, falls back to the original 2-4 sentence
+paper-style rationale.
+
 The `POST /explain/bbb` endpoint mirrors this contract. Pydantic
 enforces a non-empty `top_features` list (422 on empty); every other
 failure mode degrades to template + WARNING log + `source="template"`.
+
+**Diagnostics**: `GET /diag/openrouter` (`src/api/main.py`) returns
+key-presence (length + 12-char prefix only), kill-switch state, chain
+length, first model id, and the result of an 8-token probe call
+against that model. Surfaced in Streamlit as the sidebar "🔧 Diagnose
+LLM" button. Use it when the deployed Space shows `source="template"`
+unexpectedly — the most common causes are a missing/misnamed
+`OPENROUTER_API_KEY` Space secret or a revoked key.
 
 ## 12. Multi-Modal Explainer (Day 8)
 
@@ -270,9 +297,11 @@ bakes the model artifact into the image so the first `/predict/bbb`
 call is instant on cold start.
 
 Default environment: `DEPLOY_ENV=hf_spaces`,
-`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`.
-Operators can opt back into LLM by setting `OPENROUTER_API_KEY` in
-the HF Space's Secrets panel and unsetting the disable flag.
+`NEUROBRIDGE_DISABLE_MLFLOW=1`. The LLM kill-switch is **not** set —
+deployed Spaces use the real OpenRouter free-tier chain (§11) when
+`OPENROUTER_API_KEY` is configured in the Space's Secrets panel. Set
+`NEUROBRIDGE_DISABLE_LLM=1` only when you want to force the
+deterministic template path for a fully-reproducible demo.
 
 The README's YAML front-matter declares the Space metadata
 (SDK=docker, port=7860, app_file=src/frontend/app.py).

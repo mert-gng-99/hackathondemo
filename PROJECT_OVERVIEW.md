@@ -120,7 +120,7 @@ Bir BBB tahmini yaptığında karar kartında 7 ayrı sinyal görüyorsun. Her b
 | 4 | **Calibration caption** | "≥75% güven üreten tahminler hold-out test'te %92 precision (n=18)" | Train sırasında 80/20 split, 6 threshold bin'i, lookup |
 | 5 | **Drift caption** | "trailing-100 confidence median +0.42σ from train (within range)" | Module-level `deque(maxlen=100)` + train-time median/std |
 | 6 | **Top SHAP attributions bar chart** | Hangi fingerprint bit'leri kararı pushladı? | `shap.TreeExplainer(model).shap_values(X)` exact, 3-branch dispatch (sklearn version compat) |
-| 7 | **AI Assistant rationale** (opsiyonel) | "Predicted **permeable** with 82% confidence. Top SHAP attributions toward this label..." | OpenRouter LLM (`llama-3.2-3b-instruct:free`) veya deterministik template, hybrid fallback |
+| 7 | **AI Assistant rationale** (opsiyonel) | "Predicted **permeable** with 82% confidence. Top SHAP attributions toward this label..." | OpenRouter free-tier fallback chain (10 model, head: `inclusionai/ling-2.6-1t:free`) — `user_question` diline matchler; key yoksa / chain tükenmişse deterministik template |
 
 Bu yedi katman birlikte "Black-Box AI ≠ Trust" mit'ini çürütür: kara kutu değil, **camdan kutu**.
 
@@ -215,12 +215,19 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 - **Biology-preserving:** Covariate'lere koşullu (age, sex, diagnosis), site bias'ı kaldırırken biological variance'ı tutar
 - **Alternatif neden değil:** Z-score normalization sadece location düzeltir, scale farkı kalır; CycleGAN denemeleri var ama train zamanı ve hyperparameter complexity hackathon'a uygun değil
 
-### 6.6 LLM Provider: OpenRouter (free tier llama-3.2-3b)
+### 6.6 LLM Provider: OpenRouter (free-tier fallback chain, 10 model)
 
 - **Free tier:** Hackathon süresince ücret yok, jüri demosunda da maliyet riski yok
 - **OpenAI-compatible:** `openai==1.51.0` SDK doğrudan çalışır, custom HTTP client yok
-- **Multiple model fallback:** Free tier'da llama, gemini, qwen seçenekleri var
-- **Hybrid contract:** API key yoksa veya HTTP/network hatası varsa **deterministik template path**'e düşer — demo gününde **asla çökmez**
+- **Smartest → smallest fallback chain:** `src/llm/explainer.py` içindeki `_DEFAULT_FREE_MODEL_CHAIN` 10 free-tier id tutar (head: `inclusionai/ling-2.6-1t:free` ~1T flagship → tail: `poolside/laguna-xs.2:free`). Status-code classification:
+  - `429 / 402 / 403 / 404 / 5xx` → bir sonraki modele geç
+  - `400` → o modelin prompt-shape mismatch'i, sonrakine geç
+  - `401` → key bozuk, tüm chain için anlamsız, **template'e düş + actionable WARNING** (key rotate at https://openrouter.ai/keys)
+  - Network/timeout → switching models won't help → template
+- **Runtime override:** `OPENROUTER_FREE_MODELS="modelA,modelB"` env variable ile chain'i değiştirebilirsin (model availability OpenRouter'da haftalık değişiyor; verify with `python scripts/diagnose_openrouter.py`).
+- **Hybrid contract:** API key yoksa, kill-switch açıksa veya tüm chain tükenirse **deterministik template path**'e düşer — demo gününde **asla çökmez**
+- **Prompt design (intent-split):** Caller `user_question` verirse model'a "soru diliyle cevap ver, doğrudan soruyu cevapla, off-topic ise kısa-conversational kal" denir; vermezse default 2-4 cümle paper-style rationale fallback'i devreye girer.
+- **Diagnostics:** `GET /diag/openrouter` (FastAPI) key presence (length + 12-char prefix only), kill-switch state, chain head, ve 8-token probe sonucunu döner. Streamlit'te sidebar "🔧 Diagnose LLM" butonu olarak surface'lenir.
 - **Alternatif neden değil:** OpenAI direct API ücretli, Anthropic API key yoktu, lokal Ollama demo gününde 1B model indirme/load riski
 
 ### 6.7 Tracking: MLflow
@@ -326,7 +333,7 @@ Demo gününde her şey ters gidebilir. Üç env variable her felaket senaryoyu 
 | `NEUROBRIDGE_DISABLE_MLFLOW=1` | MLflow lookup yapılmaz, provenance badge "—" gösterir, sistem çalışmaya devam eder |
 | `BBB_MODEL_PATH=...` | Default `data/processed/bbb_model.joblib` yerine farklı yol |
 
-HF Spaces deploy'ında ilk ikisi default `=1`. OpenRouter aktive etmek istersen Settings → Variables and Secrets → `OPENROUTER_API_KEY` ekle ve `NEUROBRIDGE_DISABLE_LLM=0`.
+HF Spaces deploy'ında **sadece** `NEUROBRIDGE_DISABLE_MLFLOW=1` set edilir (filesystem read-only edge case). LLM **default ON** — `Dockerfile` ve `Dockerfile.hf` artık `NEUROBRIDGE_DISABLE_LLM`'i hard-code etmiyor; deployed Space `OPENROUTER_API_KEY` Secret'ı varsa free-tier chain'i kullanır, yoksa template'e düşer. LLM'i jüri demosunda %100 deterministik istersen Space → Settings → Variables → `NEUROBRIDGE_DISABLE_LLM=1` ekle. LLM'in hangi state'te olduğunu canlı görmek için sidebar'daki "🔧 Diagnose LLM" butonu (`GET /diag/openrouter`'a vurur) key presence + chain head + 8-token probe döner.
 
 ### 8.4 Drift detection
 
@@ -472,7 +479,7 @@ Z-score sadece **mean**'i sıfıra çeker. ComBat hem mean hem **scale**'i (vari
 Olabilirdi ama **Random Forest gibi tree ensemble**'larda SHAP TreeExplainer'ın **exact** çözümü var (Lundberg & Lee 2018). LIME local linear approximation, tree boundary'larında hatalı extrapolation yapabiliyor. Hackathon jürisi sayısal kesinliği seviyor.
 
 ### "Neden OpenRouter, neden ChatGPT API değil?"
-OpenAI API ücretli + key yok. OpenRouter free tier'da llama-3.2-3b ve gemini-flash sunuyor. **Hybrid template fallback** sayesinde key olmasa veya API ölse bile sistem çalışmaya devam eder — demo gününde kritik.
+OpenAI API ücretli + key yok. OpenRouter free tier'da 1T flagship'ten (`inclusionai/ling-2.6-1t:free`) 30B reasoning'e (`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`) kadar 10 model'lik bir **smartest → smallest fallback chain** sunuyor; biri 429 / 4xx / 5xx dönerse otomatik bir sonrakine geçeriz. **Hybrid template fallback** sayesinde key olmasa, chain tükenmiş olsa veya API ölse bile sistem çalışmaya devam eder — demo gününde kritik.
 
 ### "Neden Streamlit, neden React/Next.js değil?"
 Hackathon süresi 8 gün. Python-only stack 4 günü implement'a, 2 günü test'e, 1 günü polish'e, 1 günü deploy'a verdi. React öğrenirken hackathon biterdi. Streamlit'in "fast iteration" değer önerisi tam bizim için.
@@ -643,7 +650,7 @@ Yukarıdaki bölümlerde geçen teknik terimlerin sade Türkçe karşılıkları
 ### 16.5 LLM / Açıklanabilirlik
 
 - **LLM (Large Language Model):** GPT, Llama, Gemini, Claude gibi büyük dil modelleri.
-- **OpenRouter:** Birçok LLM provider'ı tek API arkasında toplayan servis. Free tier'da `llama-3.2-3b`, `gemini-flash`, `qwen` gibi seçenekler.
+- **OpenRouter:** Birçok LLM provider'ı tek API arkasında toplayan servis. Free tier'da `inclusionai/ling-2.6-1t`, `nvidia/nemotron-3-super-120b`, `google/gemma-4-31b`, `qwen3-next-80b` gibi seçenekler — biz smartest → smallest 10-model fallback chain (`_DEFAULT_FREE_MODEL_CHAIN`) ile her birini sırayla deniyoruz.
 - **API Key:** Bir servise erişim için kişisel jeton. Asla repo'ya commit edilmez (HF Spaces "Variables and Secrets"'a girilir).
 - **Rationale (Gerekçe):** Modelin tahminine dair doğal-dil açıklama (örn. "Predicted permeable with 82% confidence; SHAP attributions toward this label include bits 532 and 1024…").
 - **Source Label:** Cevabın hangi kaynaktan geldiğini gösteren etiket. Bizde `source: "llm"` veya `source: "template"` — auditability için.

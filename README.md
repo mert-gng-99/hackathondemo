@@ -224,15 +224,22 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Day-8 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-06-day8-grand-finale.md`](docs/superpowers/plans/2026-05-06-day8-grand-finale.md)
 - **New surfaces:** `POST /explain/eeg`, `POST /explain/mri`, `GET /experiments/runs`, `POST /experiments/diff`
 - **New deploy artifacts:** `Dockerfile.hf`, `supervisord.conf`
+- **LLM hardening (post-Day 8):** real OpenRouter LLM is now the default in deployed Spaces — `Dockerfile`/`Dockerfile.hf` no longer hard-code `NEUROBRIDGE_DISABLE_LLM=1`. Free-tier fallback chain (10 models, smartest → smallest) in [`src/llm/explainer.py`](src/llm/explainer.py), 401/400 status classification, and language-matching / intent-split prompt. Diagnostic endpoint `GET /diag/openrouter` ([`src/api/main.py`](src/api/main.py)) + Streamlit sidebar "🔧 Diagnose LLM" button. Live verification helper: [`scripts/diagnose_openrouter.py`](scripts/diagnose_openrouter.py).
 
 ## Day 7 — Demo Recipe
 
 Pre-flight (one terminal):
 
 ```bash
-# Start API with deterministic explainer (no LLM key needed)
-NEUROBRIDGE_DISABLE_LLM=1 BBB_MODEL_PATH=data/processed/bbb_model.joblib \
+# Start API. With OPENROUTER_API_KEY set in your shell or .env,
+# /explain/* hits the real LLM via the free-tier fallback chain
+# (10 models, smartest → smallest — see AGENTS.md §11). Without
+# a key, falls back to the deterministic template.
+BBB_MODEL_PATH=data/processed/bbb_model.joblib \
   uvicorn src.api.main:app --port 8000
+
+# Force the deterministic template path (no network, fully reproducible):
+#   NEUROBRIDGE_DISABLE_LLM=1 BBB_MODEL_PATH=... uvicorn ...
 ```
 
 Predict + explain (other terminal):
@@ -243,7 +250,10 @@ curl -s -X POST http://localhost:8000/predict/bbb \
   -H "Content-Type: application/json" \
   -d '{"smiles": "CCO", "top_k": 5}' | jq
 
-# 2) Explain — feed the predict response back as the explain payload
+# 2) Explain — feed the predict response back as the explain payload.
+#    user_question drives the prompt: question language is mirrored
+#    (Turkish question → Turkish answer), and the model answers the
+#    question directly instead of returning a canned paper summary.
 curl -s -X POST http://localhost:8000/explain/bbb \
   -H "Content-Type: application/json" \
   -d '{
@@ -258,11 +268,13 @@ curl -s -X POST http://localhost:8000/explain/bbb \
     "drift_z": 0.42,
     "user_question": "Why permeable?"
   }' | jq
+# With a valid key: expect "source": "llm" + a model id from the chain.
+# Without:          expect "source": "template" + "model": null.
 
-# 3) Same call but with LLM enabled (set the key first)
-unset NEUROBRIDGE_DISABLE_LLM
-export OPENROUTER_API_KEY="sk-or-v1-…"
-# Repeat the curl above; expect "source": "llm" and a model name.
+# 3) Diagnose OpenRouter reachability from inside the running API
+#    (key presence, chain head, 8-token probe). Surfaced in Streamlit
+#    as the sidebar "🔧 Diagnose LLM" button.
+curl -s http://localhost:8000/diag/openrouter | jq
 ```
 
 Streamlit demo: `streamlit run src/frontend/app.py` → BBB tab → Predict → AI Assistant tab → ask a preset question.
