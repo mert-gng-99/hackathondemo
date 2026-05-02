@@ -93,3 +93,36 @@ class TestBuildDefaultTools:
         assert "sites_csv" in MRIPipelineInput.model_fields
         assert "query" in RetrieveContextInput.model_fields
         assert "k" in RetrieveContextInput.model_fields
+
+    def test_retrieve_context_short_circuits_when_no_index(self) -> None:
+        tools = build_default_tools(rag_index_dir=None)
+        retrieve = next(t for t in tools if t.name == "retrieve_context")
+        out = retrieve.invoke({"query": "anything", "k": 3})
+        assert out == {"query": "anything", "chunks": []}
+
+    def test_processed_dir_parameter_threads_to_executors(self, tmp_path: Path) -> None:
+        # build_default_tools should accept processed_dir; executors should
+        # eventually write under it (we don't invoke the pipelines here, just
+        # verify the parameter is accepted and tools are built).
+        tools = build_default_tools(rag_index_dir=None, processed_dir=tmp_path)
+        names = {t.name for t in tools}
+        assert "run_eeg_pipeline" in names
+        assert "run_mri_pipeline" in names
+
+    def test_default_processed_dir_when_omitted(self) -> None:
+        # backwards-compat: omitting processed_dir keeps existing behavior
+        tools = build_default_tools(rag_index_dir=None)
+        # just ensure no exception and 4 tools returned
+        assert len(tools) == 4
+
+    def test_bbb_executor_translates_httpexception_to_valueerror(self) -> None:
+        from unittest.mock import patch
+        from fastapi import HTTPException
+
+        tools = build_default_tools(rag_index_dir=None)
+        bbb = next(t for t in tools if t.name == "run_bbb_pipeline")
+
+        with patch("src.api.routes.predict_bbb",
+                   side_effect=HTTPException(status_code=503, detail="model missing")):
+            with pytest.raises(ValueError, match="bbb tool failed"):
+                bbb.invoke({"smiles": "CCO"})

@@ -73,66 +73,81 @@ class Tool:
 # ---------------------------------------------------------------------------
 
 
-def _execute_bbb(inp: BBBPipelineInput) -> BBBPipelineOutput:
-    """Predict + SHAP for a single SMILES, reusing the existing model surface."""
-    from src.api import routes as api_routes
-    from src.api.schemas import BBBPredictRequest
+def _make_bbb_executor() -> Callable[[BBBPipelineInput], BBBPipelineOutput]:
+    """Closure factory: BBB permeability prediction + SHAP, translates HTTPException."""
+    def execute(inp: BBBPipelineInput) -> BBBPipelineOutput:
+        from src.api import routes as api_routes
+        from src.api.schemas import BBBPredictRequest
+        from fastapi import HTTPException
+        try:
+            response = api_routes.predict_bbb(
+                BBBPredictRequest(smiles=inp.smiles, top_k=inp.top_k)
+            )
+        except HTTPException as e:
+            raise ValueError(f"bbb tool failed: {e.detail}") from e
+        return BBBPipelineOutput(
+            smiles=inp.smiles,
+            label=response.label,
+            label_text=response.label_text,
+            confidence=response.confidence,
+            top_features=[f.model_dump() for f in response.top_features],
+            drift_z=response.drift_z,
+        )
+    return execute
 
-    response = api_routes.predict_bbb(
-        BBBPredictRequest(smiles=inp.smiles, top_k=inp.top_k)
-    )
-    return BBBPipelineOutput(
-        smiles=inp.smiles,
-        label=response.label,
-        label_text=response.label_text,
-        confidence=response.confidence,
-        top_features=[f.model_dump() for f in response.top_features],
-        drift_z=response.drift_z,
-    )
 
-
-def _execute_eeg(inp: EEGPipelineInput) -> EEGPipelineOutput:
-    """Run the EEG pipeline via the existing route function (run_eeg)."""
-    from src.api.schemas import EEGRequest
-    from src.api import routes as api_routes
-
-    out_path = Path("data/processed/eeg_features.parquet")
-    response = api_routes.run_eeg(
-        EEGRequest(
+def _make_eeg_executor(processed_dir: Path) -> Callable[[EEGPipelineInput], EEGPipelineOutput]:
+    """Closure factory: EEG pipeline, writes output under processed_dir."""
+    def execute(inp: EEGPipelineInput) -> EEGPipelineOutput:
+        from src.api.schemas import EEGRequest
+        from src.api import routes as api_routes
+        from fastapi import HTTPException
+        out_path = processed_dir / "eeg_features.parquet"
+        try:
+            response = api_routes.run_eeg(
+                EEGRequest(
+                    input_path=inp.input_path,
+                    output_path=str(out_path),
+                    epoch_duration_s=inp.epoch_duration_s,
+                )
+            )
+        except HTTPException as e:
+            raise ValueError(f"eeg tool failed: {e.detail}") from e
+        return EEGPipelineOutput(
             input_path=inp.input_path,
-            output_path=str(out_path),
-            epoch_duration_s=inp.epoch_duration_s,
+            output_path=response.output_path,
+            rows=response.rows,
+            columns=response.columns,
+            duration_sec=response.duration_sec,
         )
-    )
-    return EEGPipelineOutput(
-        input_path=inp.input_path,
-        output_path=response.output_path,
-        rows=response.rows,
-        columns=response.columns,
-        duration_sec=response.duration_sec,
-    )
+    return execute
 
 
-def _execute_mri(inp: MRIPipelineInput) -> MRIPipelineOutput:
-    """Run the MRI pipeline via the existing route function (run_mri)."""
-    from src.api.schemas import MRIRequest
-    from src.api import routes as api_routes
-
-    out_path = Path("data/processed/mri_features.parquet")
-    response = api_routes.run_mri(
-        MRIRequest(
+def _make_mri_executor(processed_dir: Path) -> Callable[[MRIPipelineInput], MRIPipelineOutput]:
+    """Closure factory: MRI pipeline, writes output under processed_dir."""
+    def execute(inp: MRIPipelineInput) -> MRIPipelineOutput:
+        from src.api.schemas import MRIRequest
+        from src.api import routes as api_routes
+        from fastapi import HTTPException
+        out_path = processed_dir / "mri_features.parquet"
+        try:
+            response = api_routes.run_mri(
+                MRIRequest(
+                    input_dir=inp.input_dir,
+                    sites_csv=inp.sites_csv,
+                    output_path=str(out_path),
+                )
+            )
+        except HTTPException as e:
+            raise ValueError(f"mri tool failed: {e.detail}") from e
+        return MRIPipelineOutput(
             input_dir=inp.input_dir,
-            sites_csv=inp.sites_csv,
-            output_path=str(out_path),
+            output_path=response.output_path,
+            rows=response.rows,
+            columns=response.columns,
+            duration_sec=response.duration_sec,
         )
-    )
-    return MRIPipelineOutput(
-        input_dir=inp.input_dir,
-        output_path=response.output_path,
-        rows=response.rows,
-        columns=response.columns,
-        duration_sec=response.duration_sec,
-    )
+    return execute
 
 
 def _make_retrieve_executor(rag_index_dir: Path | None) -> Callable[[RetrieveContextInput], RetrieveContextOutput]:
@@ -151,7 +166,10 @@ def _make_retrieve_executor(rag_index_dir: Path | None) -> Callable[[RetrieveCon
     return execute
 
 
-def build_default_tools(rag_index_dir: Path | None) -> list[Tool]:
+def build_default_tools(
+    rag_index_dir: Path | None,
+    processed_dir: Path = Path("data/processed"),
+) -> list[Tool]:
     """Return the 4 tools the orchestrator gets by default."""
     return [
         Tool(
@@ -164,7 +182,7 @@ def build_default_tools(rag_index_dir: Path | None) -> list[Tool]:
             ),
             input_model=BBBPipelineInput,
             output_model=BBBPipelineOutput,
-            execute=_execute_bbb,
+            execute=_make_bbb_executor(),
         ),
         Tool(
             name="run_eeg_pipeline",
@@ -176,7 +194,7 @@ def build_default_tools(rag_index_dir: Path | None) -> list[Tool]:
             ),
             input_model=EEGPipelineInput,
             output_model=EEGPipelineOutput,
-            execute=_execute_eeg,
+            execute=_make_eeg_executor(processed_dir),
         ),
         Tool(
             name="run_mri_pipeline",
@@ -187,7 +205,7 @@ def build_default_tools(rag_index_dir: Path | None) -> list[Tool]:
             ),
             input_model=MRIPipelineInput,
             output_model=MRIPipelineOutput,
-            execute=_execute_mri,
+            execute=_make_mri_executor(processed_dir),
         ),
         Tool(
             name="retrieve_context",
