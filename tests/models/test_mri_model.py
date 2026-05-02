@@ -52,3 +52,31 @@ class TestMRIDLModel:
         probs = result["probabilities"]
         assert len(probs) == 2
         assert sum(p["probability"] for p in probs) == pytest.approx(1.0, abs=1e-6)
+
+    def test_predict_warns_on_label_count_mismatch(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        artifact = build_dummy_mri_onnx(tmp_path / "mri_model.onnx")
+        model = mri_model.load(artifact)
+
+        # mri_model.logger has propagate=False (src/core/logger.py), so pytest's
+        # caplog root handler never sees its records. Attach caplog.handler directly.
+        mri_model.logger.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.WARNING, logger="src.models.mri_model"):
+                result = mri_model.predict_nifti(
+                    model,
+                    _FIXTURE_MRI,
+                    target_shape=(8, 8, 8),
+                    label_names=("control", "abnormal", "extra"),
+                )
+        finally:
+            mri_model.logger.removeHandler(caplog.handler)
+
+        assert result["label_text"] in {"class_0", "class_1"}
+        assert any(
+            "label_names length" in rec.message and "overriding" in rec.message
+            for rec in caplog.records
+        ), [rec.message for rec in caplog.records]

@@ -95,6 +95,13 @@ def predict_with_proba(
     output = model.run(None, {input_name: model_input.astype(np.float32, copy=False)})[0]
     proba = _as_probabilities(np.asarray(output, dtype=np.float32))
     if len(labels) != proba.shape[0]:
+        logger.warning(
+            "label_names length (%d) does not match model output dim (%d); "
+            "overriding with class_0..class_N. Provided labels: %r",
+            len(labels),
+            proba.shape[0],
+            list(labels),
+        )
         labels = tuple(f"class_{i}" for i in range(proba.shape[0]))
 
     label_idx = int(np.argmax(proba))
