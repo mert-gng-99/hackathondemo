@@ -17,6 +17,16 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Load .env (project root) so OPENROUTER_API_KEY etc. are available without
+# the caller having to export them. Safe no-op if python-dotenv isn't
+# installed or .env is missing. Existing env vars are NOT overridden.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(override=False)
+except ImportError:
+    pass
+
 
 class FeatureRow(TypedDict):
     feature: str
@@ -39,10 +49,37 @@ class ExplainResult(TypedDict):
 
 
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-_DEFAULT_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
 _LLM_TIMEOUT_SECONDS = 8.0
 _LLM_MAX_TOKENS = 256
 _LLM_TEMPERATURE = 0.3
+
+# Free-tier fallback chain, smartest → smallest. When a model returns 429
+# (rate-limit / daily-quota exhausted), 402 (credits), 404 (id retired) or
+# 5xx (upstream), we advance to the next model. Network/timeout errors fall
+# straight to the deterministic template — switching models won't help.
+# Override at runtime via OPENROUTER_FREE_MODELS (comma-separated). Model
+# availability on OpenRouter churns; an ID that 404s is skipped silently.
+_DEFAULT_FREE_MODEL_CHAIN: tuple[str, ...] = (
+    "inclusionai/ling-2.6-1t:free",                        # ~1T flagship
+    "nvidia/nemotron-3-super-120b-a12b:free",              # 120B reasoning MoE
+    "minimax/minimax-m2.5:free",
+    "tencent/hy3-preview:free",                            # MoE + reasoning
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "poolside/laguna-m.1:free",
+    "poolside/laguna-xs.2:free",
+    "meta-llama/llama-3.2-3b-instruct:free",               # 3B last-resort
+)
+
+
+def _free_model_chain() -> tuple[str, ...]:
+    raw = os.environ.get("OPENROUTER_FREE_MODELS")
+    if raw:
+        ids = tuple(m.strip() for m in raw.split(",") if m.strip())
+        if ids:
+            return ids
+    return _DEFAULT_FREE_MODEL_CHAIN
 
 
 def _should_use_llm() -> bool:
@@ -222,10 +259,20 @@ def _build_llm_prompt(payload: ExplainPayload, modality: str = "bbb") -> str:
 
 
 def _llm_explain(payload: ExplainPayload, modality: str = "bbb") -> tuple[str, str] | None:
-    """Try the OpenRouter chat completion. Return (rationale, model) or None."""
+    """Try the OpenRouter chat completion across the free-tier fallback chain.
+
+    Returns (rationale, model_id) on first success, or None if every model
+    is exhausted / unreachable (caller falls back to the template).
+    """
     try:
-        # Local import — keeps this dep optional at module load time.
-        from openai import OpenAI
+        # Local imports — keeps this dep optional at module load time.
+        from openai import (
+            OpenAI,
+            APIConnectionError,
+            APIStatusError,
+            APITimeoutError,
+            RateLimitError,
+        )
     except ImportError as e:
         logger.warning("openai SDK not importable: %s", e)
         return None
@@ -240,28 +287,49 @@ def _llm_explain(payload: ExplainPayload, modality: str = "bbb") -> tuple[str, s
         timeout=_LLM_TIMEOUT_SECONDS,
     )
     prompt = _build_llm_prompt(payload, modality)
-    try:
-        completion = client.chat.completions.create(
-            model=_DEFAULT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=_LLM_MAX_TOKENS,
-            temperature=_LLM_TEMPERATURE,
-        )
-    except Exception as e:  # broad: APITimeoutError, APIConnectionError, RateLimitError, ...
-        logger.warning("LLM call failed (%s); falling back to template.", type(e).__name__)
-        return None
+    chain = _free_model_chain()
 
-    try:
-        text = completion.choices[0].message.content
-    except (AttributeError, IndexError, TypeError) as e:
-        logger.warning("LLM response malformed (%s); falling back to template.", e)
-        return None
+    for model in chain:
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=_LLM_MAX_TOKENS,
+                temperature=_LLM_TEMPERATURE,
+            )
+        except RateLimitError:
+            logger.info("OpenRouter 429 on %s; advancing to next free model.", model)
+            continue
+        except APIStatusError as e:
+            status = getattr(e, "status_code", None)
+            # 402 credits / 403 access / 404 retired-id / 5xx upstream → next.
+            if status in (402, 403, 404) or (status is not None and 500 <= status < 600):
+                logger.info("OpenRouter %s on %s; advancing to next free model.", status, model)
+                continue
+            logger.warning("LLM call failed on %s (%s); falling back to template.", model, e)
+            return None
+        except (APIConnectionError, APITimeoutError) as e:
+            # Network is global — switching models won't help.
+            logger.warning("LLM connection error (%s); falling back to template.", type(e).__name__)
+            return None
+        except Exception as e:
+            logger.warning("LLM unexpected error on %s (%s); falling back to template.", model, type(e).__name__)
+            return None
 
-    if not text or not text.strip():
-        logger.warning("LLM returned empty rationale; falling back to template.")
-        return None
+        try:
+            text = completion.choices[0].message.content
+        except (AttributeError, IndexError, TypeError) as e:
+            logger.info("LLM response malformed on %s (%s); advancing to next model.", model, e)
+            continue
 
-    return text.strip(), _DEFAULT_MODEL
+        if not text or not text.strip():
+            logger.info("LLM returned empty rationale on %s; advancing to next model.", model)
+            continue
+
+        return text.strip(), model
+
+    logger.warning("All free models exhausted; falling back to template.")
+    return None
 
 
 def explain(
