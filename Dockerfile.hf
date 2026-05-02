@@ -43,6 +43,14 @@ RUN mkdir -p data/raw data/processed && \
     python -c "from pathlib import Path; from src.pipelines.eeg_pipeline import run_pipeline; run_pipeline(input_path=Path('tests/fixtures/eeg_sample.fif'), output_path=Path('data/processed/eeg_features.parquet'))" && \
     python -c "from pathlib import Path; from src.pipelines.mri_pipeline import run_pipeline; run_pipeline(input_dir=Path('tests/fixtures/mri_sample'), sites_csv=Path('tests/fixtures/mri_sample/sites.csv'), output_path=Path('data/processed/mri_features.parquet'))"
 
+# --- RAG knowledge base ingest ---
+# Build the FAISS index from any seed docs in tests/fixtures/kb_sample/
+# (always present) plus data/knowledge_base/ (optional, user-supplied via
+# additional COPY layer or volume mount). Empty KB → empty index, agent
+# still functions, retrieve_context just returns no chunks.
+COPY tests/fixtures/kb_sample/ ./data/knowledge_base/seed/
+RUN python -m src.rag.ingest data/knowledge_base data/processed/faiss_index
+
 # --- HF Spaces convention ---
 EXPOSE 7860
 
