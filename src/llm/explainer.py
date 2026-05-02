@@ -58,18 +58,21 @@ _LLM_TEMPERATURE = 0.3
 # 5xx (upstream), we advance to the next model. Network/timeout errors fall
 # straight to the deterministic template — switching models won't help.
 # Override at runtime via OPENROUTER_FREE_MODELS (comma-separated). Model
-# availability on OpenRouter churns; an ID that 404s is skipped silently.
+# availability on OpenRouter churns; verify with scripts/diagnose_openrouter.py.
+# Last verified: 2026-05-02 via scripts/diagnose_openrouter.py.
+# Entries marked "currently 429" have valid IDs but were quota-exhausted at
+# probe time; kept because OpenRouter rate-limits are per-window and recover.
 _DEFAULT_FREE_MODEL_CHAIN: tuple[str, ...] = (
-    "inclusionai/ling-2.6-1t:free",                        # ~1T flagship
-    "nvidia/nemotron-3-super-120b-a12b:free",              # 120B reasoning MoE
-    "minimax/minimax-m2.5:free",
-    "tencent/hy3-preview:free",                            # MoE + reasoning
-    "google/gemma-4-31b-it:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-    "poolside/laguna-m.1:free",
-    "poolside/laguna-xs.2:free",
-    "meta-llama/llama-3.2-3b-instruct:free",               # 3B last-resort
+    "inclusionai/ling-2.6-1t:free",                        # ~1T flagship — verified OK, returns content
+    "nvidia/nemotron-3-super-120b-a12b:free",              # 120B — verified OK, returns content
+    "minimax/minimax-m2.5:free",                           # MoE — verified OK, returns content
+    "qwen/qwen3-next-80b-a3b-instruct:free",               # 80B — currently 429 but valid id
+    "google/gemma-4-31b-it:free",                          # 31B — currently 429 but valid id
+    "google/gemma-4-26b-a4b-it:free",                      # 26B MoE — currently 429 but valid id
+    "tencent/hy3-preview:free",                            # MoE preview — verified OK
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",  # 30B reasoning — verified OK
+    "nvidia/nemotron-3-nano-30b-a3b:free",                 # 30B — verified OK
+    "poolside/laguna-xs.2:free",                           # smallest — verified OK
 )
 
 
@@ -302,6 +305,26 @@ def _llm_explain(payload: ExplainPayload, modality: str = "bbb") -> tuple[str, s
             continue
         except APIStatusError as e:
             status = getattr(e, "status_code", None)
+            # 401 = unauthorized — the key is bad, no model in this chain
+            # will succeed. Surface a loud, actionable hint and bail.
+            if status == 401:
+                logger.warning(
+                    "OpenRouter 401 unauthorized on %s. The OPENROUTER_API_KEY "
+                    "is rejected — verify it is current at "
+                    "https://openrouter.ai/keys and that free-model data-sharing "
+                    "is enabled at https://openrouter.ai/settings/privacy. "
+                    "Falling back to deterministic template.",
+                    model,
+                )
+                return None
+            # 400 = malformed prompt for this specific model (e.g. it
+            # rejected our system role). Skip this model, try the next.
+            if status == 400:
+                logger.info(
+                    "OpenRouter 400 on %s (likely prompt-shape mismatch); "
+                    "advancing to next free model.", model,
+                )
+                continue
             # 402 credits / 403 access / 404 retired-id / 5xx upstream → next.
             if status in (402, 403, 404) or (status is not None and 500 <= status < 600):
                 logger.info("OpenRouter %s on %s; advancing to next free model.", status, model)
