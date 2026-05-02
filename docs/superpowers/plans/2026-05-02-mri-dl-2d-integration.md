@@ -32,18 +32,13 @@ CLASS_TO_IDX = {
 
 ---
 
-## Prerequisite (controller blocker)
+## Asset note
 
-The artifact `best_model.pt` is **not** present on this filesystem. Before any task starts:
+The user's trained checkpoint (`outputs\checkpoints\best_model.pt` on the trainer machine) is the artifact this plan loads. Drop it at `data/processed/mri_dl_2d/best_model.pt`. The training is finished — this plan does **not** retrain or re-tune; it loads the user's exact `state_dict` (or pickled `nn.Module`) and runs inference with the documented preprocessing contract (resize to `image_size=160`, ImageNet normalisation, 4-class head).
 
-1. Copy the file from the trainer machine to `data/processed/mri_dl_2d/best_model.pt`.
-2. Confirm with `python -c "import torch; sd = torch.load('data/processed/mri_dl_2d/best_model.pt', map_location='cpu'); print(type(sd), list(sd.keys())[:5] if isinstance(sd, dict) else sd)"`. Two possible structures:
-   - **`state_dict` only** (most common): `dict[str, Tensor]`. Task 1 builds the resnet18 architecture and `load_state_dict`s.
-   - **Full model** (`torch.save(model, ...)`): a pickled `nn.Module`. Task 1 just calls `torch.load(...)`.
-   - The plan defaults to **state_dict** (more portable). If the file turns out to be a full model, Task 1 has a fallback branch.
-3. Add the artifact path to `.gitignore` if it isn't already covered (`data/processed/` should already be ignored — verify).
+`data/processed/` is already gitignored — never commit the binary.
 
-If step 2 fails, **stop and surface to the user** — the trainer either produced a different artifact or saved with an unexpected structure.
+The plan's tests use a synthetic dummy resnet18 (built on demand in `tests/fixtures/build_dummy_resnet18_2d.py`), so every TDD step runs green even before the real artifact arrives. Task 4 adds a real-artifact sanity test that auto-skips when the checkpoint is absent and runs once the user drops it in.
 
 ---
 

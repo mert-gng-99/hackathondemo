@@ -8,7 +8,7 @@
 |---|---|---|
 | Pretrained MRI 2D classifier | PyTorch resnet18 trained on Kaggle's 4-class Alzheimer's MRI dataset (`MildDemented` / `ModerateDemented` / `NonDemented` / `VeryMildDemented`) | The dummy ONNX model in `tests/fixtures/build_dummy_mri_onnx.py`; the placeholder behaviour in `src/models/mri_model.py` |
 | TF-IDF RAG corpus | 14 medical PDFs (Alzheimer + Parkinson + lifestyle/nutrition/exercise) with a pre-built TF-IDF index and Turkish query expansion | The existing FAISS+fastembed RAG in `src/rag/` (or runs alongside it) |
-| OASIS tabular classifier (ipynb) | sklearn ensemble on OASIS longitudinal biomarkers (MMSE, eTIV, nWBV, ASF, …) | **Not an EEG model** — see sub-plan #3 for two routing options |
+| EEG pretrained classifier (assumed for demo) | Any classifier with a `predict_proba` interface that emits Alzheimer's-related class probabilities. **The real artifact is not in the repo yet** — for the hackathon demo we ship a stub-able contract; swap the real `.joblib` (or `.onnx` / `.pt`) in later. | The current EEG path which is signal-processing only (no classifier yet in `src/models/`) |
 
 ---
 
@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 1 | `2026-05-02-mri-dl-2d-integration.md` | Real MRI deep-learning model in production path | — (parallel to fusion) | yes (Streamlit + curl) |
 | 2 | `2026-05-02-tfidf-rag-integration.md` | Lifestyle / clinical-paper RAG with Turkish support | — | yes (CLI + agent tool) |
-| 3 | `2026-05-02-oasis-tabular-fusion-integration.md` | Tabular OASIS classifier as a fusion-engine feature **OR** wait for a real EEG model | fusion engine (#1 of clinical-platform-roadmap) | yes (POST /fusion/predict) |
+| 3 | `2026-05-02-eeg-stub-integration.md` | Stub-able EEG classifier contract that flows into fusion as the `eeg` modality. Real artifact swaps in later without code changes. | fusion engine (already shipped) | yes (POST /predict/eeg + fusion) |
 
 ---
 
@@ -33,13 +33,13 @@
                       └──────────────┬───────────────────┘
                                      │
                               ┌──────▼─────────┐
-                              │ #3 OASIS       │
-                              │ classifier as  │
-                              │ fusion feature │
+                              │ #3 EEG stub    │
+                              │ (real artifact │
+                              │  drops in later)│
                               └────────────────┘
 ```
 
-#1 and #2 can be built in parallel (different files). #3 should follow once both are stable so the demo flows end-to-end.
+All three are independent on file boundaries — they can be built in parallel by different subagents. The diagram shows demo flow priority, not a build dependency.
 
 ---
 
@@ -47,9 +47,9 @@
 
 These are **not** dev gaps — they are inputs we need from outside this codebase. Each sub-plan calls them out explicitly in its preamble, but listing here so they are in one place.
 
-### A. MRI checkpoint file is not on this machine
+### A. MRI checkpoint drop-in
 
-The user said the artifact lives at `outputs\checkpoints\best_model.pt` (Windows-style path). `find /Users/mertgungor` returns no `best_model.pt`. Sub-plan #1 cannot start until the file is at `data/processed/mri_dl_2d/best_model.pt` (gitignored — never commit a model binary). Confirm class index order matches the trainer:
+The artifact lives at `outputs\checkpoints\best_model.pt` on the trainer machine. Drop it at `data/processed/mri_dl_2d/best_model.pt` in this repo (gitignored — never commit a model binary). The user's BEST_PARAMS are final: `image_size=160`, `model_name=resnet18`, 4-class head with the index order below. The integration code does not retrain or second-guess; it loads and predicts.
 
 ```python
 CLASS_TO_IDX = {
@@ -60,18 +60,11 @@ CLASS_TO_IDX = {
 }
 ```
 
-If the trainer used a different ordering (`ImageFolder` alphabetises by default), the labels we surface will be wrong. Sub-plan #1 ships a sanity test that catches this.
+Sub-plan #1 ships a real-artifact sanity test that runs only when the file is present (skipped otherwise) — catches any class-order or input-shape drift the trainer might surprise us with later.
 
-### B. The "EEG ipynb" is OASIS tabular, not EEG
+### B. EEG artifact is intentionally a stub for the demo
 
-`/Users/mertgungor/Downloads/rag/detecting-early-alzheimer-s (1).ipynb` trains an sklearn ensemble (LogReg / SVM / DT / RF / AdaBoost) on the OASIS longitudinal MRI **tabular** dataset (`oasis_longitudinal.csv` — MMSE, eTIV, nWBV, ASF, EDUC, SES, …). It contains zero EEG signal processing and saves no model artifact.
-
-Sub-plan #3 has **two branches**:
-
-- **Branch 3a (default).** Treat the OASIS biomarker model as a clinical-tests extension to the fusion engine (already accepts MMSE etc. as features — this just adds eTIV/nWBV/ASF and re-runs the trained sklearn model in-process).
-- **Branch 3b.** If the user has a real EEG model elsewhere (a checkpoint file that consumes raw FIF / EDF data and emits class probabilities), the user must point us to it and we re-scope sub-plan #3 around that artifact.
-
-The user must pick the branch before sub-plan #3 starts.
+Real EEG checkpoint will land later. For the hackathon, sub-plan #3 ships a stub artifact (`tests/fixtures/build_dummy_eeg_clf.py` produces a synthetic joblib-pickled `RandomForestClassifier`) and a clear contract: **input** = numpy array of shape `(n_features,)` matching the existing `eeg_pipeline.py` feature output; **output** = class probabilities for `("control", "alzheimers")`. Swapping in the real artifact later requires zero code changes — just drop the file at `data/processed/eeg_clf.joblib` and update labels in env if the real classes differ.
 
 ### C. RAG corpus location
 
