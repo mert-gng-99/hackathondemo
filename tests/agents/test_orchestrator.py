@@ -229,3 +229,44 @@ class TestOrchestrator:
         assert [t.name for t in result.trace] == ["run_bbb_pipeline", "retrieve_context"]
         assert result.trace[0].result == {"label_text": "permeable", "confidence": 0.82}
         assert result.trace[1].args["query"] == "BBB permeability of small lipophilic molecules"
+
+    def test_workflow_drops_out_of_stage_tool_call_with_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = [
+            # During the pipeline stage the model wrongly calls retrieve_context
+            _fake_choice_with_tool_call("retrieve_context", {"query": "x", "k": 4}),
+            # After the workflow guard runs the BBB pipeline, model produces text
+            _fake_choice_with_text("Skipping retrieval."),
+            # Then the guard runs retrieve_context, model finalizes
+            _fake_choice_with_text("Final answer."),
+        ]
+        orch = Orchestrator(
+            llm_client=client,
+            tools=_make_workflow_tools(),
+            system_prompt="sys",
+            model="stub-model",
+            max_steps=5,
+            enforce_workflow=True,
+            workflow_pipeline_tools={"run_bbb_pipeline"},
+            workflow_retrieval_tool="retrieve_context",
+            workflow_router=lambda user_input, context: (
+                "run_bbb_pipeline",
+                {"smiles": user_input},
+            ),
+            workflow_query_builder=lambda user_input, pipeline_trace, context: "q",
+        )
+        from src.agents import orchestrator as orch_module
+        orch_module.logger.addHandler(caplog.handler)
+        try:
+            result = orch.run("CCO")
+        finally:
+            orch_module.logger.removeHandler(caplog.handler)
+        assert result.finish_reason == "complete"
+        assert any(
+            "dropped out-of-stage tool call" in rec.message
+            and "retrieve_context" in rec.message
+            and "stage=pipeline" in rec.message
+            for rec in caplog.records
+        ), [rec.message for rec in caplog.records]

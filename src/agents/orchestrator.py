@@ -226,12 +226,30 @@ class Orchestrator:
             for tc in tool_calls:
                 if tc.function.name in self._workflow_pipeline_tools:
                     return [tc]
+            for tc in tool_calls:
+                logger.info(
+                    "dropped out-of-stage tool call: name=%s stage=%s",
+                    tc.function.name,
+                    stage,
+                )
             return []
         if stage == "retrieve":
             for tc in tool_calls:
                 if tc.function.name == self._workflow_retrieval_tool:
                     return [tc]
+            for tc in tool_calls:
+                logger.info(
+                    "dropped out-of-stage tool call: name=%s stage=%s",
+                    tc.function.name,
+                    stage,
+                )
             return []
+        for tc in tool_calls:
+            logger.info(
+                "dropped out-of-stage tool call: name=%s stage=%s",
+                tc.function.name,
+                stage,
+            )
         return []
 
     def _invoke_routed_pipeline(
