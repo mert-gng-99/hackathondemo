@@ -1,7 +1,7 @@
 """Tool dataclass + registry. Wraps each pipeline + the RAG retriever as a
 function-callable tool the orchestrator can invoke.
 
-Public entry: `build_default_tools(rag_index_dir)` returns the 5 tools.
+Public entry: `build_default_tools(rag_index_dir)` returns the 7 tools.
 """
 from __future__ import annotations
 
@@ -12,8 +12,12 @@ from typing import Any, Callable
 from pydantic import BaseModel, ValidationError
 
 from src.agents.schemas import (
+    BBBPermeabilityMapInput,
+    BBBPermeabilityMapOutput,
     BBBPipelineInput,
     BBBPipelineOutput,
+    DrugDoseAdjustmentInput,
+    DrugDoseAdjustmentOutput,
     EEGPipelineInput,
     EEGPipelineOutput,
     MRIPipelineInput,
@@ -203,6 +207,59 @@ def _make_retrieve_executor(
     return execute
 
 
+def _make_bbb_permeability_executor() -> Callable[[BBBPermeabilityMapInput], BBBPermeabilityMapOutput]:
+    def execute(inp: BBBPermeabilityMapInput) -> BBBPermeabilityMapOutput:
+        from src.models import bbb_permeability_map as bbb_perm
+        result = bbb_perm.compute_permeability(
+            input_path=Path(inp.input_path),
+            mode=inp.mode,
+        )
+        return BBBPermeabilityMapOutput(
+            permeability_score=float(result["permeability_score"]),
+            interpretation=str(result["interpretation"]),
+            method=str(result["method"]),
+            voxel_map_available=bool(result.get("voxel_map_available", False)),
+        )
+
+    return execute
+
+
+def _make_dose_adjuster_executor() -> Callable[[DrugDoseAdjustmentInput], DrugDoseAdjustmentOutput]:
+    def execute(inp: DrugDoseAdjustmentInput) -> DrugDoseAdjustmentOutput:
+        from src.research import drug_dose_adjuster
+
+        drug_permeable = inp.drug_bbb_permeable
+        if inp.smiles:
+            try:
+                from src.models import bbb_model
+                import os as _os
+                artifact = Path(_os.environ.get("BBB_MODEL_PATH", "data/processed/bbb_model.pkl"))
+                if artifact.exists():
+                    model = bbb_model.load_model(artifact)
+                    pred = bbb_model.predict_one(model, inp.smiles)
+                    drug_permeable = bool(pred["label"] == 1)
+            except (FileNotFoundError, ValueError, KeyError) as e:
+                logger.warning(
+                    "agent dose-adjuster could not auto-resolve BBB for smiles=%s: %s",
+                    inp.smiles, e,
+                )
+
+        adj = drug_dose_adjuster.adjust(
+            baseline_dose_mg=inp.baseline_dose_mg,
+            bbb_permeability_score=inp.bbb_permeability_score,
+            drug_bbb_permeable=drug_permeable,
+        )
+        return DrugDoseAdjustmentOutput(
+            recommended_dose_mg=adj.recommended_dose_mg,
+            adjustment_factor=adj.adjustment_factor,
+            risk_level=adj.risk_level,
+            rationale=adj.rationale,
+            drug_bbb_permeable=drug_permeable,
+        )
+
+    return execute
+
+
 def build_default_tools(
     rag_index_dir: Path | None,
     processed_dir: Path = Path("data/processed"),
@@ -271,5 +328,30 @@ def build_default_tools(
             input_model=FusionInput,
             output_model=FusionOutput,
             execute=lambda inp: fuse_engine(inp),
+        ),
+        Tool(
+            name="compute_bbb_leakage_score",
+            description=(
+                "Researcher-only. Compute a BBB permeability score (0..1) "
+                "from a patient MRI. Mode 'heuristic_proxy' (default) uses "
+                "the 2D Alzheimer's classifier; 'dce_onnx' uses a real DCE "
+                "ONNX model when available."
+            ),
+            input_model=BBBPermeabilityMapInput,
+            output_model=BBBPermeabilityMapOutput,
+            execute=_make_bbb_permeability_executor(),
+        ),
+        Tool(
+            name="adjust_drug_dose",
+            description=(
+                "Researcher-only. Suggest a revised drug dose given the patient's "
+                "BBB permeability score and the drug's BBB classification. If "
+                "smiles is supplied, the BBB classifier auto-resolves whether "
+                "the drug crosses the BBB. Output is a research suggestion, "
+                "NOT medical advice."
+            ),
+            input_model=DrugDoseAdjustmentInput,
+            output_model=DrugDoseAdjustmentOutput,
+            execute=_make_dose_adjuster_executor(),
         ),
     ]

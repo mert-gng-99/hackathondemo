@@ -70,7 +70,7 @@ class TestTool:
 
 
 class TestBuildDefaultTools:
-    def test_default_set_has_four_tools(self, tmp_path: Path) -> None:
+    def test_default_set_has_seven_tools(self, tmp_path: Path) -> None:
         # build with placeholder paths; tools won't be invoked here
         tools = build_default_tools(rag_index_dir=None)
         names = {t.name for t in tools}
@@ -80,6 +80,8 @@ class TestBuildDefaultTools:
             "run_mri_pipeline",
             "retrieve_context",
             "run_fusion",
+            "compute_bbb_leakage_score",
+            "adjust_drug_dose",
         }
 
     def test_each_tool_has_pydantic_input_model(self) -> None:
@@ -116,8 +118,8 @@ class TestBuildDefaultTools:
     def test_default_processed_dir_when_omitted(self) -> None:
         # backwards-compat: omitting processed_dir keeps existing behavior
         tools = build_default_tools(rag_index_dir=None)
-        # just ensure no exception and 5 tools returned
-        assert len(tools) == 5
+        # just ensure no exception and 7 tools returned
+        assert len(tools) == 7
 
     def test_bbb_executor_translates_httpexception_to_valueerror(self) -> None:
         from fastapi import HTTPException

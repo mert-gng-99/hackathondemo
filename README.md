@@ -42,6 +42,7 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 | 9 | Agent/RAG hardening + MRI DL decision layer | Guarded orchestration + `POST /predict/mri` ONNX surface | Shipped — 242 passed, 2 skipped |
 | 10 | Multi-modal fusion engine | `POST /fusion/predict` + `run_fusion` agent tool — MRI + EEG + clinical scores → per-disease confidence with attribution | Shipped — 295 passed, 1 skipped |
 | 11 | External assets integration | 2D resnet18 MRI Alzheimer's path · TF-IDF clinical RAG with TR query expansion · stub-able EEG pretrained classifier | Shipped — 330 passed, 2 skipped |
+| 12 | DCE-MRI BBB bridge + drug-dose adjuster | `POST /predict/bbb_permeability_map` (heuristic_proxy or dce_onnx) + `POST /research/drug_dose_adjustment` + Researcher Streamlit tab + `compute_bbb_leakage_score` & `adjust_drug_dose` agent tools | Shipped |
 
 ### Fusion Engine
 
@@ -95,6 +96,49 @@ python scripts/clinical_rag_smoke.py "egzersiz Alzheimer feedback"
 The Turkish keywords `alzheimer`, `parkinson`, `egzersiz`, `beslenme`,
 `tani`, `tedavi`, `risk`, `unutkanlik`, `titreme`, `demans` auto-expand
 to English equivalents so Turkish queries hit English chunks.
+
+### DCE-MRI BBB Bridge + Drug-Dose Adjuster (Researcher persona)
+
+Clinical fact: Dynamic Contrast-Enhanced (DCE) MRI measures BBB leakage by
+tracking gadolinium contrast washout. A leaky BBB lets drugs cross into
+the brain at unsafe levels, so concentrations need revising.
+
+This is the **only legitimate place where BBB and MRI couple** in the
+platform — the Researcher lane only. The fusion engine's "BBB is NOT a
+diagnostic modality" rule is preserved.
+
+**`POST /predict/bbb_permeability_map`** — two modes:
+
+- `heuristic_proxy` (default, demo-ready): reuses the 2D resnet18
+  Alzheimer's classifier; score = `1 - P(NonDemented)`. Anchored in the
+  published correlation between disease severity and BBB breakdown.
+- `dce_onnx` (real DCE artifact, swap-in later): loads an ONNX model
+  trained on 4D DCE-MRI data, emits a Ktrans map normalised to `[0, 1]`.
+  Drop the artifact at `data/processed/bbb_permeability_dce.onnx` (or set
+  `BBB_PERMEABILITY_DCE_PATH`).
+
+**`POST /research/drug_dose_adjustment`** — pure-function logic:
+
+| BBB score | Drug BBB-permeable | Recommended dose |
+|---|---|---|
+| < 0.20 (intact) | any | 100% of baseline (low risk) |
+| ≥ 0.20 (leaky) | yes | `max(30%, 1 − 0.7·score)` of baseline (moderate / high risk) |
+| ≥ 0.20 (leaky) | no | `max(60%, 1 − 0.4·score)` of baseline (moderate risk) |
+| ≥ 0.20 (leaky) | unknown | treated as permeable (safer assumption) |
+
+When `smiles` is supplied, the BBB classifier auto-resolves the drug's
+permeability — closes the researcher loop end-to-end. The rationale always
+includes the sentence "Research suggestion, not medical advice."
+
+Streamlit `Researcher` tab combines both into a single 2-column flow:
+left side picks an MRI image and runs the leakage scorer; right side
+takes a SMILES + baseline dose and computes a revised dose with risk
+badge and rationale card.
+
+Agent tools (orchestrator-callable):
+
+- `compute_bbb_leakage_score` — wraps `/predict/bbb_permeability_map`.
+- `adjust_drug_dose` — wraps `/research/drug_dose_adjustment`.
 
 ### EEG Pretrained Classifier (stub-able for demo)
 

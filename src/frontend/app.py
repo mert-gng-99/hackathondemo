@@ -1678,6 +1678,94 @@ def _render_combat_diagnostics(result: dict) -> None:
                     st.error(f"Cannot reach FastAPI: {e!r}")
 
 
+def _render_researcher_tab() -> None:
+    """Drug researcher view: BBB permeability map + dose adjustment."""
+    st.markdown("### Drug Researcher")
+    st.caption(
+        "DCE-MRI inspired BBB leakage score → revised dose suggestion. "
+        "Output is a research signal, NOT medical advice."
+    )
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.markdown("**1. Patient BBB permeability**")
+        mri_path = st.text_input(
+            "MRI image path (server-side)",
+            "tests/fixtures/mri_sample/subject_0_axial.png",
+            key="researcher_mri_path",
+        )
+        mode = st.selectbox(
+            "Scoring mode",
+            ["heuristic_proxy", "dce_onnx"],
+            index=0,
+            key="researcher_perm_mode",
+            help="heuristic_proxy uses the 2D classifier; dce_onnx requires a trained DCE artifact.",
+        )
+        if st.button("Compute BBB leakage score", key="researcher_compute_perm"):
+            with st.spinner("Running BBB permeability scorer..."):
+                try:
+                    result = _post(
+                        "/predict/bbb_permeability_map",
+                        {"input_path": mri_path, "mode": mode},
+                        timeout=60.0,
+                    )
+                except httpx.HTTPStatusError as e:
+                    st.error(f"BBB permeability failed (HTTP {e.response.status_code}): {e.response.text}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI: {e!r}")
+                else:
+                    st.session_state["researcher_perm"] = result
+                    st.metric(
+                        label=result.get("interpretation", "BBB"),
+                        value=f"{float(result['permeability_score']) * 100:.1f}%",
+                        help=f"method={result.get('method', '?')}",
+                    )
+
+    with col_right:
+        st.markdown("**2. Drug + baseline dose**")
+        smiles = st.text_input("SMILES", "CCO", key="researcher_smiles")
+        baseline = st.number_input(
+            "Baseline dose (mg)",
+            min_value=0.1, max_value=2000.0, value=100.0, step=10.0,
+            key="researcher_baseline",
+        )
+        score_default = float(
+            st.session_state.get("researcher_perm", {}).get("permeability_score", 0.0)
+        )
+        score = st.number_input(
+            "BBB permeability score",
+            min_value=0.0, max_value=1.0, value=score_default, step=0.05,
+            key="researcher_score",
+            help="Auto-fills from the BBB leakage score above; override manually if you want.",
+        )
+        if st.button("Suggest revised dose", key="researcher_compute_dose"):
+            payload = {
+                "smiles": smiles or None,
+                "baseline_dose_mg": float(baseline),
+                "bbb_permeability_score": float(score),
+            }
+            with st.spinner("Computing dose adjustment..."):
+                try:
+                    result = _post("/research/drug_dose_adjustment", payload, timeout=30.0)
+                except httpx.HTTPStatusError as e:
+                    st.error(f"Dose adjustment failed (HTTP {e.response.status_code}): {e.response.text}")
+                except httpx.RequestError as e:
+                    st.error(f"Cannot reach FastAPI: {e!r}")
+                else:
+                    risk = result.get("risk_level", "unknown")
+                    risk_emoji = {"low": "🟢", "moderate": "🟡", "high": "🔴"}.get(risk, "⚪️")
+                    st.metric(
+                        label=f"{risk_emoji} Recommended dose",
+                        value=f"{result['recommended_dose_mg']:.1f} mg",
+                        delta=f"{(result['adjustment_factor'] - 1.0) * 100:+.0f}%",
+                        delta_color="inverse",
+                    )
+                    drug_perm = result.get("drug_bbb_permeable")
+                    if drug_perm is not None:
+                        st.caption(f"Drug BBB-permeable: **{drug_perm}**")
+                    st.info(result.get("rationale", ""))
+
+
 def _render_ai_assistant_tab() -> None:
     """Chat-style explainer for the most recent BBB prediction."""
     _render_section(
@@ -1889,10 +1977,11 @@ def main() -> None:
             "Run `uvicorn src.api.main:app --port 8000` or `docker compose up`."
         )
 
-    bbb_tab, eeg_tab, mri_tab, assistant_tab, experiments_tab, agent_tab = st.tabs([
+    bbb_tab, eeg_tab, mri_tab, researcher_tab, assistant_tab, experiments_tab, agent_tab = st.tabs([
         "Molecule",
         "Signal",
         "Image",
+        "Researcher",
         "AI Assistant",
         "Experiments",
         "🤖 Agent",
@@ -1904,6 +1993,8 @@ def main() -> None:
         _render_eeg_tab()
     with mri_tab:
         _render_mri_tab()
+    with researcher_tab:
+        _render_researcher_tab()
     with assistant_tab:
         _render_ai_assistant_tab()
     with experiments_tab:

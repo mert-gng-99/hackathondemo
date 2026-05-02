@@ -27,6 +27,10 @@ from src.api.schemas import (
     BBBPredictResponse,
     BBBRequest,
     CalibrationContext,
+    BBBPermeabilityMapRequest,
+    BBBPermeabilityMapResponse,
+    DrugDoseAdjustmentRequest,
+    DrugDoseAdjustmentResponse,
     EEGClassProbability,
     EEGExplainRequest,
     EEGPredictRequest,
@@ -63,6 +67,7 @@ router = APIRouter(prefix="/pipeline")
 predict_router = APIRouter(prefix="/predict")
 explain_router = APIRouter(prefix="/explain")
 experiments_router = APIRouter(prefix="/experiments")
+research_router = APIRouter(prefix="/research")
 
 
 def _wrap(
@@ -317,6 +322,79 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         drift_z=drift_z,
         rolling_n=rolling_n,
         provenance=provenance,
+    )
+
+
+@predict_router.post("/bbb_permeability_map", response_model=BBBPermeabilityMapResponse)
+def predict_bbb_permeability_map(req: BBBPermeabilityMapRequest) -> BBBPermeabilityMapResponse:
+    """Compute a BBB permeability score from MRI input.
+
+    Two modes:
+    - heuristic_proxy (default): reuses the 2D resnet18 4-class classifier;
+      score = 1 - P(NonDemented). Demo-ready today.
+    - dce_onnx (real DCE artifact): loads an ONNX model trained on 4D DCE
+      data; emits a Ktrans map normalised to [0, 1]. Stub — drop the real
+      artifact at data/processed/bbb_permeability_dce.onnx (or set
+      BBB_PERMEABILITY_DCE_PATH).
+
+    Researcher-persona route — does NOT feed into the fusion engine.
+    """
+    from src.models import bbb_permeability_map as bbb_perm
+
+    try:
+        result = bbb_perm.compute_permeability(
+            input_path=Path(req.input_path),
+            mode=req.mode,  # type: ignore[arg-type]
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return BBBPermeabilityMapResponse(
+        permeability_score=float(result["permeability_score"]),
+        interpretation=str(result["interpretation"]),
+        method=str(result["method"]),
+        voxel_map_available=bool(result.get("voxel_map_available", False)),
+    )
+
+
+@research_router.post("/drug_dose_adjustment", response_model=DrugDoseAdjustmentResponse)
+def research_drug_dose_adjustment(req: DrugDoseAdjustmentRequest) -> DrugDoseAdjustmentResponse:
+    """Suggest a revised drug dose given patient BBB permeability + drug profile.
+
+    If `smiles` is supplied, the BBB classifier is consulted to populate
+    `drug_bbb_permeable` (overriding any explicit value). Researcher-persona
+    route — output is a research suggestion, NOT medical advice.
+    """
+    from src.research import drug_dose_adjuster
+
+    drug_permeable: bool | None = req.drug_bbb_permeable
+    if req.smiles:
+        try:
+            artifact = _bbb_model_path()
+            if artifact.exists():
+                model = bbb_model.load_model(artifact)
+                bbb_pred = bbb_model.predict_one(model, req.smiles)
+                drug_permeable = bool(bbb_pred["label"] == 1)
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            logger.warning("could not auto-resolve BBB permeability for smiles=%s: %s", req.smiles, e)
+
+    try:
+        adj = drug_dose_adjuster.adjust(
+            baseline_dose_mg=req.baseline_dose_mg,
+            bbb_permeability_score=req.bbb_permeability_score,
+            drug_bbb_permeable=drug_permeable,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return DrugDoseAdjustmentResponse(
+        recommended_dose_mg=adj.recommended_dose_mg,
+        adjustment_factor=adj.adjustment_factor,
+        risk_level=adj.risk_level,
+        rationale=adj.rationale,
+        drug_bbb_permeable=drug_permeable,
     )
 
 

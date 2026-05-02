@@ -113,6 +113,61 @@ class BBBPredictResponse(BaseModel):
     )
 
 
+class BBBPermeabilityMapRequest(BaseModel):
+    """Compute a per-patient BBB permeability score from MRI input."""
+    input_path: str = Field(
+        ...,
+        description=(
+            "Path to MRI input. heuristic_proxy mode: 2D image (.png/.jpg) "
+            "consumed by the resnet18 4-class Alzheimer's classifier. "
+            "dce_onnx mode: 4D NIfTI (X,Y,Z,T) for the DCE Ktrans pipeline."
+        ),
+    )
+    mode: str = Field(
+        "heuristic_proxy",
+        description="'heuristic_proxy' (default, demo-ready) | 'dce_onnx' (real DCE artifact)",
+    )
+
+
+class BBBPermeabilityMapResponse(BaseModel):
+    """Researcher-persona BBB leakage payload."""
+    permeability_score: float = Field(..., ge=0.0, le=1.0,
+        description="Scalar in [0,1]; 0=intact, 1=fully leaky.")
+    interpretation: str = Field(..., description="'BBB intact' | 'mild leakage' | 'moderate leakage' | 'severe leakage'")
+    method: str = Field(..., description="'heuristic_proxy' | 'dce_onnx'")
+    voxel_map_available: bool = False
+
+
+class DrugDoseAdjustmentRequest(BaseModel):
+    """Researcher-persona dose-revision request, given patient BBB + drug profile."""
+    smiles: str | None = Field(
+        None,
+        description=(
+            "Optional SMILES. When provided, the route auto-resolves "
+            "drug_bbb_permeable via the BBB classifier (overrides any "
+            "explicit value below)."
+        ),
+    )
+    baseline_dose_mg: float = Field(..., gt=0.0, description="Standard adult dose in mg.")
+    bbb_permeability_score: float = Field(..., ge=0.0, le=1.0)
+    drug_bbb_permeable: bool | None = Field(
+        None,
+        description="If known, whether the drug crosses the BBB. Auto-resolved when smiles is given.",
+    )
+
+
+class DrugDoseAdjustmentResponse(BaseModel):
+    """Recommended dose with rationale. NOT medical advice."""
+    recommended_dose_mg: float
+    adjustment_factor: float = Field(..., ge=0.0, le=1.0)
+    risk_level: str = Field(..., description="'low' | 'moderate' | 'high'")
+    rationale: str
+    drug_bbb_permeable: bool | None = Field(
+        None,
+        description="Echoed back; reflects what was used in the calculation (auto-resolved if smiles was given).",
+    )
+
+
 class EEGPredictRequest(BaseModel):
     """Single-subject EEG-features prediction request."""
     features: list[float] = Field(

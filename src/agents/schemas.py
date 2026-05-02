@@ -34,6 +34,40 @@ class MRIPipelineInput(BaseModel):
     )
 
 
+class BBBPermeabilityMapInput(BaseModel):
+    """Input for `compute_bbb_leakage_score` — MRI input + scoring mode."""
+    input_path: str = Field(..., description="Path to MRI input (2D image for heuristic_proxy; 4D NIfTI for dce_onnx).")
+    mode: Literal["heuristic_proxy", "dce_onnx"] = Field(
+        "heuristic_proxy",
+        description="'heuristic_proxy' (default) | 'dce_onnx' (real DCE artifact)",
+    )
+
+
+class BBBPermeabilityMapOutput(BaseModel):
+    permeability_score: float
+    interpretation: str
+    method: str
+    voxel_map_available: bool
+
+
+class DrugDoseAdjustmentInput(BaseModel):
+    """Input for `adjust_drug_dose` — baseline + patient + drug profile."""
+    baseline_dose_mg: float = Field(..., gt=0.0)
+    bbb_permeability_score: float = Field(..., ge=0.0, le=1.0)
+    drug_bbb_permeable: bool | None = None
+    smiles: str | None = Field(
+        None, description="Optional SMILES; auto-resolves drug_bbb_permeable when given.",
+    )
+
+
+class DrugDoseAdjustmentOutput(BaseModel):
+    recommended_dose_mg: float
+    adjustment_factor: float
+    risk_level: str
+    rationale: str
+    drug_bbb_permeable: bool | None = None
+
+
 class RetrieveContextInput(BaseModel):
     """Input for `retrieve_context` — natural-language query into the KB."""
     query: str = Field(..., min_length=2, description="Search query for the knowledge base")
