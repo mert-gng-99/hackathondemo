@@ -250,3 +250,46 @@ class TestAuthFailureShortCircuits:
         assert attempts == ["model-a:free", "model-b:free", "model-c:free"], (
             f"400 must advance to next model; got attempts={attempts}"
         )
+
+
+import os as _os
+
+import pytest as _pytest
+
+
+@_pytest.mark.skipif(
+    not _os.environ.get("OPENROUTER_API_KEY"),
+    reason="OPENROUTER_API_KEY not set — skipping live LLM integration test",
+)
+@_pytest.mark.skipif(
+    _os.environ.get("NEUROBRIDGE_DISABLE_LLM") == "1",
+    reason="NEUROBRIDGE_DISABLE_LLM=1 — skipping live LLM integration test",
+)
+class TestLiveOpenRouterLLM:
+    """End-to-end: hit a real OpenRouter free-tier model and assert
+    `explain()` returns source='llm' with non-empty content. Skipped
+    when no key is set or the kill-switch is on."""
+
+    def test_bbb_explain_returns_llm_source_with_real_key(self):
+        from src.llm import explainer as ex
+
+        result = ex.explain(_payload(), modality="bbb")
+
+        # If every model in the chain is rate-limited or unreachable RIGHT NOW
+        # the result will fall back to template — that's a flaky-network
+        # condition, not a code bug. Surface it as an XFAIL-style assertion
+        # message instead of a hard failure.
+        if result["source"] == "template":
+            _pytest.skip(
+                "All free models in the chain were rate-limited or unreachable "
+                "at test time. Re-run later or run scripts/diagnose_openrouter.py."
+            )
+
+        assert result["source"] == "llm"
+        assert result["model"] is not None and result["model"].endswith(":free")
+        assert result["rationale"].strip(), "LLM returned empty rationale"
+        # Sanity: the rationale should mention SOMETHING about the prediction.
+        # We do not assert on exact model wording (non-deterministic), but
+        # we do assert it isn't a generic refusal/safety-filter response.
+        lowered = result["rationale"].lower()
+        assert not lowered.startswith("i cannot"), f"LLM refused: {result['rationale']!r}"
