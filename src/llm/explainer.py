@@ -59,13 +59,16 @@ _LLM_TEMPERATURE = 0.3
 # straight to the deterministic template — switching models won't help.
 # Override at runtime via OPENROUTER_FREE_MODELS (comma-separated). Model
 # availability on OpenRouter churns; verify with scripts/diagnose_openrouter.py.
+# Last verified: 2026-05-02 via scripts/diagnose_openrouter.py.
+# Entries marked "currently 429" have valid IDs but were quota-exhausted at
+# probe time; kept because OpenRouter rate-limits are per-window and recover.
 _DEFAULT_FREE_MODEL_CHAIN: tuple[str, ...] = (
     "inclusionai/ling-2.6-1t:free",                        # ~1T flagship — verified OK, returns content
     "nvidia/nemotron-3-super-120b-a12b:free",              # 120B — verified OK, returns content
     "minimax/minimax-m2.5:free",                           # MoE — verified OK, returns content
+    "qwen/qwen3-next-80b-a3b-instruct:free",               # 80B — currently 429 but valid id
     "google/gemma-4-31b-it:free",                          # 31B — currently 429 but valid id
     "google/gemma-4-26b-a4b-it:free",                      # 26B MoE — currently 429 but valid id
-    "qwen/qwen3-next-80b-a3b-instruct:free",               # 80B — currently 429 but valid id
     "tencent/hy3-preview:free",                            # MoE preview — verified OK
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",  # 30B reasoning — verified OK
     "nvidia/nemotron-3-nano-30b-a3b:free",                 # 30B — verified OK
