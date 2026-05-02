@@ -1,7 +1,7 @@
 """Tool dataclass + registry. Wraps each pipeline + the RAG retriever as a
 function-callable tool the orchestrator can invoke.
 
-Public entry: `build_default_tools(rag_index_dir)` returns the 4 tools.
+Public entry: `build_default_tools(rag_index_dir)` returns the 5 tools.
 """
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from src.agents.schemas import (
     RetrieveContextInput,
     RetrieveContextOutput,
 )
+from src.fusion.engine import fuse as fuse_engine
+from src.fusion.types import FusionInput, FusionOutput
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -175,7 +177,7 @@ def build_default_tools(
     rag_index_dir: Path | None,
     processed_dir: Path = Path("data/processed"),
 ) -> list[Tool]:
-    """Return the 4 tools the orchestrator gets by default."""
+    """Return the 5 tools the orchestrator gets by default."""
     return [
         Tool(
             name="run_bbb_pipeline",
@@ -224,5 +226,18 @@ def build_default_tools(
             input_model=RetrieveContextInput,
             output_model=RetrieveContextOutput,
             execute=_make_retrieve_executor(rag_index_dir),
+        ),
+        Tool(
+            name="run_fusion",
+            description=(
+                "Combine MRI prediction, EEG prediction, and clinical-test "
+                "scores (MMSE, MoCA, UPDRS, gait, age) into per-disease "
+                "(Alzheimer's, Parkinson's, other) confidence with full "
+                "attribution. Pass whichever modalities are available; "
+                "missing ones are skipped, not imputed. Does NOT use BBB."
+            ),
+            input_model=FusionInput,
+            output_model=FusionOutput,
+            execute=lambda inp: fuse_engine(inp),
         ),
     ]

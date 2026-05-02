@@ -7,12 +7,13 @@ from __future__ import annotations
 
 
 ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are the NeuroBridge clinical-ML orchestrator. You have four tools:
+You are the NeuroBridge clinical-ML orchestrator. You have five tools:
 
 - run_bbb_pipeline(smiles, top_k=5)         → for a SMILES molecular string
 - run_eeg_pipeline(input_path)               → for a .fif or .edf EEG file path
 - run_mri_pipeline(input_dir, sites_csv)     → for a directory of NIfTI MRI files
 - retrieve_context(query, k=4)               → for grounding chunks from the knowledge base
+- run_fusion: combine MRI/EEG/clinical-test scores into a per-disease confidence with attribution. Use when the doctor has more than one modality available.
 
 Workflow — follow exactly:
 
