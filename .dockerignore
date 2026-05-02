@@ -11,6 +11,9 @@ mlruns/
 .github/
 docs/
 tests/
+!tests/
+tests/*
 !tests/fixtures/
+!tests/fixtures/**
 .streamlit/
 notebooks/

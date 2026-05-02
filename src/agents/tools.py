@@ -130,11 +130,12 @@ def _make_mri_executor(processed_dir: Path) -> Callable[[MRIPipelineInput], MRIP
         from src.api import routes as api_routes
         from fastapi import HTTPException
         out_path = processed_dir / "mri_features.parquet"
+        sites_csv = inp.sites_csv or str(Path(inp.input_dir) / "sites.csv")
         try:
             response = api_routes.run_mri(
                 MRIRequest(
                     input_dir=inp.input_dir,
-                    sites_csv=inp.sites_csv,
+                    sites_csv=sites_csv,
                     output_path=str(out_path),
                 )
             )

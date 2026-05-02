@@ -9,7 +9,7 @@
 
 ## 1. Tek Cümleyle Ne Yaptık?
 
-Üç farklı klinik veri tipini (molekül / EEG sinyali / MRI görüntüsü) tek bir API + tek bir web arayüzü arkasında işleyen, her tahmin için **etiket + güven skoru + kalibrasyon + drift sinyali + MLflow izlenebilirlik bilgisi + doğal-dilde AI açıklaması** döndüren, jüri demosu için olası tüm çökme noktalarını "kill-switch" ile koruyan bir B2B "Living Decision System" inşa ettik.
+Üç farklı klinik veri tipini (molekül / EEG sinyali / MRI görüntüsü) tek bir API + tek bir web arayüzü arkasında işleyen, her tahmin için **etiket + güven skoru + kalibrasyon + drift sinyali + MLflow izlenebilirlik bilgisi + doğal-dilde AI açıklaması** döndüren, MRI tarafında dışarıda eğitilecek volumetrik deep-learning modelini ONNX üzerinden `POST /predict/mri` ile sisteme bağlayan, RAG destekli agent yüzeyiyle pipeline araçlarını orkestre eden ve jüri demosu için olası çökme noktalarını "kill-switch" ile koruyan bir B2B "Living Decision System" inşa ettik.
 
 Hackathon teması: **"Building AI Systems for Neurotechnology & Health"** — ve jüri 6 boyutta puanlıyor (Problem Depth, System Quality, Robustness, Interaction, Execution, Creativity). Her boyutu spesifik feature'larla cevapladık. Detayları aşağıda.
 
@@ -106,6 +106,19 @@ Pipeline iki kez çalışır (pre + post ComBat) ve long-format DataFrame döner
 
 **Neden ComBat?** ComBat orijinal olarak gen ekspresyon batch effect'leri için icat edildi (Johnson et al. 2007), neuroimaging'e (Fortin et al. 2017, 2018) uyarlandı. Empirical Bayes yaklaşımıyla site-bağımlı location + scale parametrelerini öğreniyor, **biological signal'i koruyarak** site bias'ını kaldırıyor. Tek başına z-score normalization farkı tam kapatamaz; ComBat hem mean hem variance'ı düzeltir.
 
+### 3.4 MRI Image Deep Learning Modeli (External Training → ONNX)
+
+MRI için eğiteceğimiz deep-learning model bu repoda train edilmiyor. Eğitim ayrı GPU ortamında yapılacak, export edilen ONNX artifact'i NeuroBridge runtime'a takılacak:
+
+- Artifact yolu: `data/processed/mri_model.onnx`
+- Override: `MRI_MODEL_PATH=/path/to/model.onnx`
+- Input: `.nii` / `.nii.gz` NIfTI volume
+- Preprocess: 3D finite-volume validation → trilinear resize (`64×64×64` default) → non-zero voxel z-score normalization → `[1, 1, D, H, W]` float32 tensor
+- Output: `[1, C]` class vector; logits veya probability kabul edilir
+- API: `POST /predict/mri`
+
+Bu ayrım önemli: `src/pipelines/mri_pipeline.py` çok-merkezli MRI verisini temizleyip ComBat ile harmonize eder; `src/models/mri_model.py` ise klinik sınıflandırma için dışarıda eğitilmiş volumetrik modeli inference aşamasında çalıştırır. Artifact yoksa endpoint HTTP 503 döner ve operatöre ONNX export yolunu söyler.
+
 ---
 
 ## 4. "Living Decision System" — Yedi Şeffaflık Katmanı
@@ -144,9 +157,11 @@ Bu yedi katman birlikte "Black-Box AI ≠ Trust" mit'ini çürütür: kara kutu 
 │  /pipeline/{bbb,eeg,mri}        → batch processing       │
 │  /pipeline/mri/diagnostics      → pre/post ComBat KPIs   │
 │  /predict/bbb                   → single-molecule infer  │
+│  /predict/mri                   → volumetric ONNX infer  │
 │  /explain/{bbb,eeg,mri}         → LLM/template rationale │
 │  /experiments/runs              → MLflow run list        │
 │  /experiments/diff              → side-by-side run diff  │
+│  /agent/run                     → pipeline tools + RAG   │
 │  /health                        → liveness check         │
 └─┬────────────┬────────────┬────────────┬─────────────────┘
   │            │            │            │
@@ -155,6 +170,8 @@ bbb_pipeline eeg_pipeline mri_pipeline llm.explainer
 + bbb_model  + MNE/ICA    + neuroHarm   + OpenRouter SDK
 + shap                                  + template fallback
 ```
+
+Agent yüzeyi (`src/agents/orchestrator.py`) LLM function-calling'i dener; model tool çağrısını atlar veya yanlış sıraya girerse guarded workflow devreye girer. Deterministik router (`src/agents/routing.py`) bir pipeline seçer, ilgili tool'u çalıştırır, `retrieve_context` ile FAISS/RAG bağlamını alır ve son sentezi yine aynı API kontratıyla döndürür.
 
 ### 5.2 Process Modeli
 
@@ -169,7 +186,9 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 | Veri | Yer | Yaşam süresi |
 |---|---|---|
 | Trained BBB model (joblib) | `data/processed/bbb_model.joblib` | Container build-time'da train, image içinde gömülü |
-| MLflow runs | `mlruns/` (default backend: SQLite) | HF Spaces'te `NEUROBRIDGE_DISABLE_MLFLOW=1` ile devre dışı (filesystem read-only edge case) |
+| MRI DL model (ONNX) | `data/processed/mri_model.onnx` veya `MRI_MODEL_PATH` | Dış eğitim ortamından export edilir; runtime yalnızca load + inference yapar |
+| RAG FAISS index | `data/processed/faiss_index/` | Build-time ingest + container startup guard ile eksikse yeniden oluşturulur |
+| MLflow runs | `mlruns/` (default backend: SQLite) | Runtime ortamına bağlı; `NEUROBRIDGE_DISABLE_MLFLOW=1` ile kapatılabilir |
 | Worker drift deque | In-memory (`collections.deque(maxlen=100)`) | Container restart'a kadar; Worker restart = state reset |
 | Streamlit session state | Browser sekmesi | Sekme kapanana kadar |
 
@@ -182,7 +201,7 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 - **Type-safe schemas:** Pydantic v2 ile request/response Pydantic modelleri otomatik validation + 422 errors
 - **OpenAPI auto-generation:** `/docs` endpoint'i jüri'ye Swagger UI sunar, integration documentation ücretsiz
 - **Async-ready:** Bizim use case sync ama gerekirse async pipeline kolayca eklenebilir
-- **Test-friendly:** `fastapi.testclient.TestClient` 175 testin çoğunu destekliyor
+- **Test-friendly:** `fastapi.testclient.TestClient` API testlerinin çoğunu gerçek network olmadan çalıştırıyor
 - **Alternatif neden değil:** Flask çok ham (her şeyi elden yazarsın), Django overkill (admin + ORM gereksiz)
 
 ### 6.2 Frontend: Streamlit
@@ -241,9 +260,18 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 
 - **Self-contained:** Tüm dependencies + kod + data tek image'da
 - **Portable:** Aynı image local'de, HF'de, ileride Railway/AWS'de çalışır
-- **Build-time train:** `RUN python -m src.pipelines.bbb_pipeline && python -m src.models.bbb_model` — model image'a gömülü, cold start instant
+- **Build-time artifacts:** BBB model train edilir, RAG index ingest edilir; cold start'ta ana demo artifact'leri hazır gelir
+- **Runtime guard:** `docker-entrypoint.sh`, host volume boş geldiyse fixture data'dan BBB modeli ve FAISS index'i yeniden üretir
 - **Supervisord:** İki process tek container'da minimal overhead
 - **Alternatif neden değil:** docker-compose multi-container çözüm güzel ama HF Spaces tek container istiyor
+
+### 6.9 Agent + RAG
+
+- **Tool-first orchestration:** Agent'ın kullanabildiği tool'lar pipeline surface'in aynısı: BBB predict, EEG pipeline, MRI pipeline ve RAG retrieval.
+- **Guarded workflow:** LLM function-calling başarısız olursa API deterministik router ile pipeline → retrieval → synthesis sırasını zorlar; demo sırasında "agent tool çağırmadı" riski kalmaz.
+- **RAG stack:** `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dim) + `faiss-cpu` (`IndexFlatIP`, L2 normalize edilmiş cosine search). Torch bağımlılığı yok.
+- **Knowledge base:** `data/knowledge_base/` altındaki `.md`, `.txt`, `.pdf` dosyaları `python -m src.rag.ingest` ile `data/processed/faiss_index/` altına yazılır.
+- **Default agent model:** `NEUROBRIDGE_AGENT_MODEL` override edilebilir; `OPENROUTER_API_KEY` yoksa `/agent/run` HTTP 503 döner.
 
 ---
 
@@ -251,7 +279,7 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 
 ### 7.1 Sayılar
 
-- **184 test, hepsi yeşil**
+- **242 passed, 2 skipped** (Windows / Python 3.11 doğrulaması)
 - 8 günlük sprint, ~50 atomik commit
 - Her test-bearing task **RED → GREEN → REFACTOR** disipliniyle yazıldı
 - Her task ayrı bir Subagent (Claude Code) tarafından implementasyon edildi, ana ajan koordine + review
@@ -260,20 +288,22 @@ Streamlit, container içinde `httpx.post("http://127.0.0.1:8000/...")` ile FastA
 
 ```
 tests/
-├── core/test_logger.py           4 tests (logger idempotency)
+├── core/                         logger, storage, tracking, determinism
 ├── pipelines/
-│   ├── test_bbb_pipeline.py     24 tests (SMILES validation, FP, drop+log, idempotence)
-│   ├── test_eeg_pipeline.py     14 tests (filter, ICA, epoching, feature extraction)
-│   └── test_mri_pipeline.py     42 tests (volume validation, masking, ComBat split, diagnostics)
-├── models/test_bbb_model.py     16 tests (train, save/load, predict, SHAP, calibration, train_stats)
-├── api/
-│   ├── test_main.py              2 tests (FastAPI app boots, /health responds)
-│   └── test_routes.py           14 tests (all 6 routers, error mapping, drift/calibration/provenance)
-├── llm/test_explainer.py         7 tests (template determinism, modality dispatch, kill-switch)
-├── frontend/test_app_import.py   2 tests (Streamlit module imports cleanly)
-└── deploy/test_dockerfile_hf.py  2 tests (Dockerfile.hf well-formed, expected stages present)
+│   ├── test_bbb_pipeline.py      SMILES validation, FP, drop+log, idempotence
+│   ├── test_eeg_pipeline.py      filter, ICA, epoching, feature extraction
+│   └── test_mri_pipeline.py      volume validation, masking, ComBat split, diagnostics
+├── models/
+│   ├── test_bbb_model.py         train, save/load, predict, SHAP, calibration, train_stats
+│   └── test_mri_model.py         NIfTI preprocess + ONNX inference contract
+├── api/                          route contracts, error mapping, drift/calibration/provenance
+├── llm/                          template determinism, modality dispatch, kill-switch
+├── rag/                          ingest, empty-index behavior, retrieval
+├── agents/                       tool schemas, guarded orchestration, agent route
+├── frontend/                     Streamlit module import smoke
+└── deploy/                       Dockerfile.hf / startup contract
 
-Total: 184 ✓
+Total: 242 passed, 2 skipped
 ```
 
 ### 7.3 UserWarning Gate
@@ -289,7 +319,7 @@ pytest -W error::UserWarning tests/
 - Her feature'ın **kabul kriteri** test koduyla yazılıyor → spec ambigüitesi sıfır
 - Implementation-first yapsak refactor cesareti olmaz
 - Subagent dispatch yaparken her task'ın **net bitiş koşulu** var: "tests pass + lint clean"
-- 184 test demosu jüri için "production-aware" sinyali
+- 242 passed / 2 skipped demosu jüri için "production-aware" sinyali
 
 ---
 
@@ -323,17 +353,20 @@ except httpx.HTTPStatusError as e:
 
 400 → `st.warning` ayrımı önemli: jüri "sistem reject etti ama çökmedi" hikâyesini görsün, kırmızı ERROR yerine sarı WARNING.
 
-### 8.3 Three Demo Lifelines (kill-switches)
+### 8.3 Demo Lifelines (kill-switches + artifact overrides)
 
-Demo gününde her şey ters gidebilir. Üç env variable her felaket senaryoyu kurtarır:
+Demo gününde her şey ters gidebilir. Bu env variable'lar kritik senaryoları kontrollü hale getirir:
 
 | Env | Etkisi |
 |---|---|
 | `NEUROBRIDGE_DISABLE_LLM=1` | OpenRouter çağrısı yapılmaz, deterministic template path'i her zaman cevap verir |
 | `NEUROBRIDGE_DISABLE_MLFLOW=1` | MLflow lookup yapılmaz, provenance badge "—" gösterir, sistem çalışmaya devam eder |
 | `BBB_MODEL_PATH=...` | Default `data/processed/bbb_model.joblib` yerine farklı yol |
+| `MRI_MODEL_PATH=...` | Default `data/processed/mri_model.onnx` yerine dışarıda eğitilen ONNX artifact yolu |
+| `OPENROUTER_API_KEY=...` | LLM explainer ve orchestrator agent'ı gerçek OpenRouter çağrılarıyla açar |
+| `NEUROBRIDGE_AGENT_MODEL=...` | Agent'ın OpenRouter modelini override eder |
 
-HF Spaces deploy'ında **sadece** `NEUROBRIDGE_DISABLE_MLFLOW=1` set edilir (filesystem read-only edge case). LLM **default ON** — `Dockerfile` ve `Dockerfile.hf` artık `NEUROBRIDGE_DISABLE_LLM`'i hard-code etmiyor; deployed Space `OPENROUTER_API_KEY` Secret'ı varsa free-tier chain'i kullanır, yoksa template'e düşer. LLM'i jüri demosunda %100 deterministik istersen Space → Settings → Variables → `NEUROBRIDGE_DISABLE_LLM=1` ekle. LLM'in hangi state'te olduğunu canlı görmek için sidebar'daki "🔧 Diagnose LLM" butonu (`GET /diag/openrouter`'a vurur) key presence + chain head + 8-token probe döner.
+Docker image artık `NEUROBRIDGE_DISABLE_MLFLOW=1` değerini hard-code etmez; operatör ortamına göre açar/kapatır. LLM **default ON** — `Dockerfile` ve `Dockerfile.hf` `NEUROBRIDGE_DISABLE_LLM`'i hard-code etmiyor; deployed Space `OPENROUTER_API_KEY` Secret'ı varsa free-tier chain'i kullanır, yoksa template'e düşer. LLM'i jüri demosunda %100 deterministik istersen Space → Settings → Variables → `NEUROBRIDGE_DISABLE_LLM=1` ekle. LLM'in hangi state'te olduğunu canlı görmek için sidebar'daki "🔧 Diagnose LLM" butonu (`GET /diag/openrouter`'a vurur) key presence + chain head + 8-token probe döner.
 
 ### 8.4 Drift detection
 
@@ -392,10 +425,10 @@ Bu "Adapt Over Time" katmanı (Living Systems pillar). Sistem **kendi tahminleri
 | Boyut | Puan | Kanıt |
 |---|---|---|
 | **Problem Depth** | 9.5/10 | 3 zor real-world problem (BBB drug-discovery, EEG artifact, MRI multi-site domain shift); slayt 11'in "blood-brain barrier" örneğine doğrudan referans |
-| **System Quality** | 9.7/10 | 184 test, TDD, 50+ atomik commit, FastAPI+Streamlit+MLflow+Docker, error mapping (400/404/422/503), 3 lifeline gate |
+| **System Quality** | 9.7/10 | 242 passed / 2 skipped, TDD, 50+ atomik commit, FastAPI+Streamlit+MLflow+Docker, error mapping (400/404/422/503), lifeline gates |
 | **Robustness** | 9.5/10 | Edge-case dropdown (5 probe), HTTP 400 → graceful warning, fallback chains everywhere |
 | **Interaction** | 9.8/10 | 5 tab + edge-case probes + calibration caption + drift caption + AI Assistant chat (3 modalite × inline expander + standalone tab) |
-| **Execution** | 9.8/10 | 8-day disciplined sprint, atomic commits, AGENTS.md 14 sections, README executive summary + demo recipe, all DoD checks green |
+| **Execution** | 9.8/10 | 8-day disciplined sprint + post-Day-8 hardening, atomic commits, AGENTS.md contract, README executive summary + demo recipe, all DoD checks green |
 | **Creativity** | 9.7/10 | LLM hybrid (template fallback) + drift z-score + ComBat KDE faceted + "Living Decision System" framing + Track-1 multi-modal AI agents + Track-5 Experiments tab |
 | **TOPLAM** | **58.0/60 (~96.8%)** | |
 
@@ -415,7 +448,7 @@ Bu "Adapt Over Time" katmanı (Living Systems pillar). Sistem **kendi tahminleri
 - ✅ Working Prototype (FastAPI + Streamlit + Docker, end-to-end functional)
 - ✅ Interactive System (5 tab, real-time predictions, custom SMILES, AI Assistant chat)
 - ✅ Explanation of Behavior (7-layer transparency stack)
-- ✅ Tested Under Real Conditions (184 tests + edge-case dropdown probes)
+- ✅ Tested Under Real Conditions (242 passed / 2 skipped + edge-case dropdown probes)
 - ❌ No slides-only — gerçek çalışan sistem
 - ❌ No perfect-data-only — edge-case dropdown bunun kanıtı
 
@@ -433,6 +466,7 @@ Bu "Adapt Over Time" katmanı (Living Systems pillar). Sistem **kendi tahminleri
 | Day 6 | Edge-case dropdown + calibration metadata + ComBat diagnostics endpoint + altair faceted KDE | 165 |
 | Day 7 | Drift detection (deque + z-score) + MLflow provenance badge + LLM explainer (OpenRouter hybrid) + AI Assistant tab | 175 |
 | Day 8 | Multi-modal explain (`/explain/{eeg,mri}`) + Experiments tab (MLflow runs + diff) + HF Spaces deploy (Dockerfile.hf + supervisord) + README pitch craft | 184 |
+| Day 9 | Agent/RAG hardening + guarded orchestration + Docker startup guard + Windows-safe MLflow tests + MRI ONNX decision layer (`/predict/mri`) | 242 passed, 2 skipped |
 
 Her gün için ayrı plan ve spec dosyası: `docs/superpowers/plans/` ve `docs/superpowers/specs/`.
 
@@ -498,8 +532,8 @@ HF free tier'da değil. Production'da:
 - Drift deque per-worker olduğu için 4 worker = 4 bağımsız buffer (production'da Redis sentinel'a çekilir)
 - ComBat batch (~500 subject/dakika single-thread, vectorize edilmiş)
 
-### "Test sayısı 184 ama nasıl?"
-TDD disipliniyle her feature'a 2-4 test yazıldı. Pipeline'lar fixture-driven (synthetic NIfTI, sample SMILES CSV, sample EEG FIF). API testleri `fastapi.testclient.TestClient` üzerinden (no real network). LLM testleri env-gated (kill-switch ile force-template path).
+### "Test sayısı 242 passed / 2 skipped ama nasıl?"
+TDD disipliniyle her feature'a 2-4 test yazıldı. Pipeline'lar fixture-driven (synthetic NIfTI, sample SMILES CSV, sample EEG FIF). API testleri `fastapi.testclient.TestClient` üzerinden (no real network). LLM ve agent testleri env-gated; RAG testleri fixture knowledge base ile çalışır; MRI ONNX kontratı dummy ONNX artifact ile doğrulanır.
 
 ---
 
@@ -527,25 +561,36 @@ hackathon/
 ├── src/
 │   ├── api/                    # FastAPI app + routes + schemas
 │   │   ├── main.py
-│   │   ├── routes.py           # 4 routers: pipeline, predict, explain, experiments
-│   │   └── schemas.py          # 15+ Pydantic models
+│   │   ├── routes.py           # pipeline, predict, explain, experiments, agent routers
+│   │   └── schemas.py          # Pydantic request/response contracts
 │   ├── core/
-│   │   └── logger.py           # Structured logging (no print())
+│   │   ├── logger.py           # Structured logging (no print())
+│   │   ├── storage.py          # Deterministic Parquet helpers
+│   │   └── tracking.py         # MLflow tracking context
 │   ├── pipelines/
 │   │   ├── bbb_pipeline.py     # SMILES → Morgan FP → Parquet
 │   │   ├── eeg_pipeline.py     # FIF/EDF → ICA → epochs → features
 │   │   └── mri_pipeline.py     # NIfTI → ROI → ComBat → diagnostics
 │   ├── models/
-│   │   └── bbb_model.py        # RF train + SHAP + calibration + train_stats
+│   │   ├── bbb_model.py        # RF train + SHAP + calibration + train_stats
+│   │   └── mri_model.py        # External ONNX MRI inference surface
 │   ├── llm/
 │   │   ├── __init__.py
 │   │   └── explainer.py        # OpenRouter + deterministic template fallback
+│   ├── rag/
+│   │   ├── ingest.py           # KB → chunks + FAISS index
+│   │   └── retrieve.py         # Top-k retrieval API
+│   ├── agents/
+│   │   ├── orchestrator.py     # OpenRouter function-calling + guarded workflow
+│   │   ├── routing.py          # Deterministic pipeline/query routing fallback
+│   │   └── tools.py            # Pipeline/RAG tool registry
 │   └── frontend/
 │       └── app.py              # Streamlit 5-tab dashboard (editorial redesign)
-├── tests/                      # 184 tests across 9 modules
+├── tests/                      # 242 passed, 2 skipped across core/api/pipelines/models/rag/agents
 ├── data/
 │   ├── raw/                    # Input data (gitignored)
-│   └── processed/              # Pipeline outputs + trained model joblib
+│   ├── knowledge_base/         # User-supplied RAG docs (gitignored)
+│   └── processed/              # Pipeline outputs + model artifacts + FAISS index
 ├── docs/
 │   └── superpowers/
 │       ├── plans/              # 8 day-by-day implementation plans
@@ -554,7 +599,7 @@ hackathon/
 ├── Dockerfile                  # Alias for HF (auto-discovery)
 ├── supervisord.conf            # Two-process launcher
 ├── requirements.txt            # Pinned deps (fastapi==0.115, sklearn==1.5.1, openai==1.51, ...)
-├── AGENTS.md                   # Team contract — 14 sections
+├── AGENTS.md                   # Team contract
 ├── README.md                   # Public-facing overview + Demo Recipe
 └── PROJECT_OVERVIEW.md         # This file
 ```
@@ -667,7 +712,7 @@ Yukarıdaki bölümlerde geçen teknik terimlerin sade Türkçe karşılıkları
 
 ## 17. Kapanış
 
-NeuroBridge Enterprise hackathon'un sloganına ("**Stop Building Ideas. Start Building Systems.**") en doğrudan cevap. 8 gün boyunca disiplinli TDD + Subagent-Driven Development ile inşa ettik. Public deploy'lu, jüri tarayıcıdan tıklayıp dokunabiliyor. 184 test green, 96.8% jüri skoru projeksiyonu, 5/5 hackathon track strong, 4/4 Living Systems pillar full.
+NeuroBridge Enterprise hackathon'un sloganına ("**Stop Building Ideas. Start Building Systems.**") en doğrudan cevap. 8 günlük sprint sonrası agent/RAG hardening ve MRI ONNX decision layer ile sistemi daha ileri taşıdık. Public deploy'lu, jüri tarayıcıdan tıklayıp dokunabiliyor. 242 passed / 2 skipped, 96.8% jüri skoru projeksiyonu, 5/5 hackathon track strong, 4/4 Living Systems pillar full.
 
 Şampiyonluğa oynuyoruz.
 

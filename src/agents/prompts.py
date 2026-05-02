@@ -20,6 +20,7 @@ Workflow — follow exactly:
    - SMILES (short, all-letters/digits, no slashes, no .ext)        → run_bbb_pipeline
    - Path ending in .fif or .edf                                    → run_eeg_pipeline
    - Path that is a directory (no file extension at the tail)       → run_mri_pipeline
+     Use sites_csv="<input_dir>/sites.csv" unless the user explicitly gives another CSV.
    If ambiguous, prefer SMILES if it parses; otherwise return:
    "Cannot identify modality. Provide a SMILES, .fif/.edf path, or NIfTI directory."
 

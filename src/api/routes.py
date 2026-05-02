@@ -37,8 +37,11 @@ from src.api.schemas import (
     ModelProvenance,
     MRIDiagnosticsRequest,
     MRIDiagnosticsResponse,
+    MRIClassProbability,
     MRIExplainRequest,
     MRIExplainResponse,
+    MRIPredictRequest,
+    MRIPredictResponse,
     MRIRequest,
     PipelineResponse,
     RunDiffRequest,
@@ -47,7 +50,7 @@ from src.api.schemas import (
 )
 from src.core.logger import get_logger
 from src.llm import explainer as llm_explainer
-from src.models import bbb_model
+from src.models import bbb_model, mri_model
 from src.pipelines import bbb_pipeline, eeg_pipeline, mri_pipeline
 
 logger = get_logger(__name__)
@@ -75,12 +78,7 @@ def _wrap(
     duration_sec = time.perf_counter() - started
 
     df = pd.read_parquet(output_path)
-    runs = mlflow.search_runs(
-        experiment_names=[experiment_name],
-        max_results=1,
-        order_by=["start_time DESC"],
-    )
-    run_id = runs.iloc[0]["run_id"] if len(runs) else None
+    run_id = _latest_mlflow_run_id(experiment_name)
 
     return PipelineResponse(
         status="ok",
@@ -90,6 +88,22 @@ def _wrap(
         duration_sec=duration_sec,
         mlflow_run_id=run_id,
     )
+
+
+def _latest_mlflow_run_id(experiment_name: str) -> str | None:
+    """Return the newest MLflow run id, degrading to None when tracking is off."""
+    if os.environ.get("NEUROBRIDGE_DISABLE_MLFLOW") == "1":
+        return None
+    try:
+        runs = mlflow.search_runs(
+            experiment_names=[experiment_name],
+            max_results=1,
+            order_by=["start_time DESC"],
+        )
+    except Exception as e:
+        logger.warning("MLflow run lookup failed for %s: %s", experiment_name, e)
+        return None
+    return str(runs.iloc[0]["run_id"]) if len(runs) else None
 
 
 @router.post("/bbb", response_model=PipelineResponse)
@@ -142,11 +156,17 @@ def run_mri(req: MRIRequest) -> PipelineResponse:
 # Default artifact location. Overridable via BBB_MODEL_PATH env var so tests
 # can point at a tmp-built model without touching production paths.
 _DEFAULT_BBB_MODEL_PATH = Path("data/processed/bbb_model.joblib")
+_DEFAULT_MRI_MODEL_PATH = Path("data/processed/mri_model.onnx")
 
 
 def _bbb_model_path() -> Path:
     """Return the BBB model artifact path, overridable via BBB_MODEL_PATH env var."""
     return Path(os.environ.get("BBB_MODEL_PATH", str(_DEFAULT_BBB_MODEL_PATH)))
+
+
+def _mri_model_path() -> Path:
+    """Return the MRI ONNX model artifact path, overridable via MRI_MODEL_PATH."""
+    return Path(os.environ.get("MRI_MODEL_PATH", str(_DEFAULT_MRI_MODEL_PATH)))
 
 
 # Per-worker rolling window of recent prediction confidences.
@@ -292,6 +312,45 @@ def predict_bbb(req: BBBPredictRequest) -> BBBPredictResponse:
         drift_z=drift_z,
         rolling_n=rolling_n,
         provenance=provenance,
+    )
+
+
+@predict_router.post("/mri", response_model=MRIPredictResponse)
+def predict_mri(req: MRIPredictRequest) -> MRIPredictResponse:
+    """Predict from one MRI NIfTI image using an externally-trained ONNX model."""
+    artifact = _mri_model_path()
+    if not artifact.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"MRI model artifact not available at {artifact}. "
+                "Export the trained volumetric model to ONNX and place it there, "
+                "or set MRI_MODEL_PATH."
+            ),
+        )
+    try:
+        model = mri_model.load(artifact)
+        pred = mri_model.predict_nifti(
+            model,
+            Path(req.input_path),
+            target_shape=req.target_shape,
+            label_names=req.label_names,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return MRIPredictResponse(
+        label=int(pred["label"]),
+        label_text=str(pred["label_text"]),
+        confidence=float(pred["confidence"]),
+        probabilities=[
+            MRIClassProbability(**p)
+            for p in pred["probabilities"]
+        ],
+        input_path=req.input_path,
+        model_path=str(artifact),
     )
 
 
@@ -521,6 +580,7 @@ def _build_orchestrator():
 
     from src.agents.orchestrator import Orchestrator
     from src.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
+    from src.agents.routing import build_retrieval_query, route_pipeline_input
     from src.agents.tools import build_default_tools
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -543,6 +603,15 @@ def _build_orchestrator():
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
         model=model,
         max_steps=5,
+        enforce_workflow=True,
+        workflow_pipeline_tools={
+            "run_bbb_pipeline",
+            "run_eeg_pipeline",
+            "run_mri_pipeline",
+        },
+        workflow_retrieval_tool="retrieve_context",
+        workflow_router=route_pipeline_input,
+        workflow_query_builder=build_retrieval_query,
     )
 
 
@@ -553,7 +622,7 @@ def run_agent(req: AgentRunRequest) -> AgentRunResponse:
     user_text = req.user_input
     if req.user_question:
         user_text = f"{req.user_input}\n\nUser question: {req.user_question}"
-    result = orch.run(user_text)
+    result = orch.run(user_text, context={"sites_csv": req.sites_csv})
     return AgentRunResponse(
         text=result.text,
         trace=[

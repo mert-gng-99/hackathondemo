@@ -67,6 +67,45 @@ def _make_ping_tool() -> Tool:
     )
 
 
+class _BBBInput(BaseModel):
+    smiles: str
+
+
+class _BBBOutput(BaseModel):
+    label_text: str
+    confidence: float
+
+
+class _RetrieveInput(BaseModel):
+    query: str
+    k: int = 4
+
+
+class _RetrieveOutput(BaseModel):
+    chunks: list[dict[str, Any]]
+
+
+def _make_workflow_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="run_bbb_pipeline",
+            description="Run BBB.",
+            input_model=_BBBInput,
+            output_model=_BBBOutput,
+            execute=lambda inp: _BBBOutput(label_text="permeable", confidence=0.82),
+        ),
+        Tool(
+            name="retrieve_context",
+            description="Retrieve context.",
+            input_model=_RetrieveInput,
+            output_model=_RetrieveOutput,
+            execute=lambda inp: _RetrieveOutput(
+                chunks=[{"source": "lipinski.md", "text": "BBB context"}]
+            ),
+        ),
+    ]
+
+
 # --- Tests ------------------------------------------------------------------
 
 
@@ -159,3 +198,34 @@ class TestOrchestrator:
         result = orch.run("trivial input")
         assert result.text == "Direct answer."
         assert result.trace == []
+
+    def test_enforced_workflow_falls_back_when_model_skips_tool_calls(self) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = [
+            _fake_choice_with_text("I will answer directly."),
+            _fake_choice_with_text("Still no retrieval."),
+            _fake_choice_with_text("Grounded final answer."),
+        ]
+        orch = Orchestrator(
+            llm_client=client,
+            tools=_make_workflow_tools(),
+            system_prompt="sys",
+            model="stub-model",
+            max_steps=5,
+            enforce_workflow=True,
+            workflow_pipeline_tools={"run_bbb_pipeline"},
+            workflow_retrieval_tool="retrieve_context",
+            workflow_router=lambda user_input, context: (
+                "run_bbb_pipeline",
+                {"smiles": user_input},
+            ),
+            workflow_query_builder=lambda user_input, pipeline_trace, context: (
+                "BBB permeability of small lipophilic molecules"
+            ),
+        )
+        result = orch.run("CCO")
+        assert result.finish_reason == "complete"
+        assert result.text == "Grounded final answer."
+        assert [t.name for t in result.trace] == ["run_bbb_pipeline", "retrieve_context"]
+        assert result.trace[0].result == {"label_text": "permeable", "confidence": 0.82}
+        assert result.trace[1].args["query"] == "BBB permeability of small lipophilic molecules"

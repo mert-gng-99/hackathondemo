@@ -30,6 +30,8 @@ RUN pip install -r requirements.txt
 COPY src/ ./src/
 COPY tests/fixtures/ ./tests/fixtures/
 COPY supervisord.conf ./supervisord.conf
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Seed raw data from fixtures so the deployed Signal/Image/Molecule tabs
 # work on first click. Then run all three pipelines so mlruns/ contains
@@ -55,4 +57,5 @@ RUN python -m src.rag.ingest data/knowledge_base data/processed/faiss_index
 EXPOSE 7860
 
 # --- launch FastAPI + Streamlit under supervisord ---
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["supervisord", "-n", "-c", "/app/supervisord.conf"]

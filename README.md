@@ -19,26 +19,27 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 
 **1.** Multi-site clinical ML pipelines fail in production because they assume clean data, single-site distributions, and black-box trust — all of which break in real labs. NeuroBridge Enterprise is the *living decision system* that closes those three gaps end-to-end across BBB drug-screening, EEG signal-cleaning, and MRI multi-site harmonization.
 
-**2.** Three production pipelines (RDKit + Morgan, MNE+ICA, neuroHarmonize ComBat) sit behind one FastAPI surface and one Streamlit dashboard, with a Random Forest BBB classifier on top — every inference returns label + confidence + 6-bin precision-at-threshold calibration + top-k SHAP attributions + drift z-score + MLflow provenance + an LLM/template natural-language rationale.
+**2.** Three production pipelines (RDKit + Morgan, MNE+ICA, neuroHarmonize ComBat) sit behind one FastAPI surface and one Streamlit dashboard, with decision layers on top: a Random Forest BBB classifier today and an MRI image ONNX inference surface ready for an externally-trained volumetric deep-learning model. The agent surface can route a user request to exactly one pipeline tool, retrieve FAISS-backed context, and synthesize a cited answer.
 
 **3.** Robustness is demoed live: a curated edge-case dropdown probes invalid SMILES, OOD molecules, and boundary inputs — the system never crashes, always degrades gracefully (HTTP 400 → recoverable warning, low confidence + lower drift score, calibration caption hedge).
 
 **4.** Adapt-Over-Time is built in: each FastAPI worker keeps a rolling 100-prediction window; the trailing median is z-scored against the train-time confidence distribution and surfaced both in the API response and the UI ("trailing-100 confidence median is +1.42σ from training distribution — mild distribution shift").
 
-**5.** 184 tests green, 8-day disciplined sprint, ~30 atomic commits, three demo lifelines (`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`, `BBB_MODEL_PATH` env) so the system is jury-day bulletproof. Public-deployable on Hugging Face Spaces with one push.
+**5.** Current verification: 242 passed, 2 skipped. Demo lifelines (`NEUROBRIDGE_DISABLE_MLFLOW=1`, `NEUROBRIDGE_DISABLE_LLM=1`, `BBB_MODEL_PATH`, `MRI_MODEL_PATH`) keep the system usable when MLflow, OpenRouter, or model artifacts are unavailable.
 
 ## Status
 
 | Day | Modality | Pipeline | Status |
 |-----|----------|----------|--------|
-| 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped — 30 tests green |
-| 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped — 67 tests green |
-| 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped — 106 tests green |
-| 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped — 142 tests green |
-| 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped — 158 tests green |
-| 6 | Final Polish & Demo Features (Edge cases + Calibration + ComBat viz) | Calibration metadata + edge-case probes + `POST /pipeline/mri/diagnostics` | Shipped — 165 tests green |
-| 7 | Final 5% (Drift, Traceability & Agents) | Per-worker drift z-score + MLflow provenance badge + `POST /explain/bbb` (LLM + template fallback) + AI Assistant tab | Shipped — 175 tests green |
-| Day 8 — The Grand Finale (Multi-Modal Agents, Track 5 & Public Deploy) | Shipped — 184 tests green |
+| 1 | Tabular (BBB / molecules) | [`bbb_pipeline.py`](src/pipelines/bbb_pipeline.py) | Shipped |
+| 2 | Signal (EEG) | [`eeg_pipeline.py`](src/pipelines/eeg_pipeline.py) | Shipped |
+| 3 | Image (MRI / fMRI) | [`mri_pipeline.py`](src/pipelines/mri_pipeline.py) | Shipped |
+| 4 | API + MLOps + Frontend | FastAPI + MLflow + Streamlit + Docker | Shipped |
+| 5 | Decision Layer (Model + XAI + Interactive UI) | [`bbb_model.py`](src/models/bbb_model.py) — RandomForest + SHAP + `POST /predict/bbb` | Shipped |
+| 6 | Final Polish & Demo Features (Edge cases + Calibration + ComBat viz) | Calibration metadata + edge-case probes + `POST /pipeline/mri/diagnostics` | Shipped |
+| 7 | Final 5% (Drift, Traceability & Agents) | Per-worker drift z-score + MLflow provenance badge + `POST /explain/bbb` (LLM + template fallback) + AI Assistant tab | Shipped |
+| 8 | Grand Finale (Multi-Modal Agents, Track 5 & Public Deploy) | Multi-modal explainers + experiments + deploy surface | Shipped |
+| 9 | Agent/RAG hardening + MRI DL decision layer | Guarded orchestration + `POST /predict/mri` ONNX surface | Shipped — 242 passed, 2 skipped |
 
 ## Quick Start
 
@@ -49,7 +50,7 @@ short_description: Living decision system for BBB, EEG, and MRI clinical ML
 # 1. Create venv and install
 python3.12 -m venv .venv312 && source .venv312/bin/activate && pip install -r requirements.txt
 
-# 2. Verify — expect 106 passed
+# 2. Verify — current full suite: 242 passed, 2 skipped
 pytest -v
 
 # 3. Smoke run with the bundled 6-row fixture
@@ -99,6 +100,37 @@ curl -s -X POST http://localhost:8000/predict/bbb \
   -d '{"smiles": "CCO", "top_k": 5}' | python3 -m json.tool
 ```
 
+### Add the MRI image deep-learning model
+
+MRI deep-learning training happens outside this repository. Export the trained
+volumetric model to ONNX and place it at:
+
+```text
+data/processed/mri_model.onnx
+```
+
+The runtime contract is:
+
+- Input file: one `.nii` / `.nii.gz` MRI volume.
+- Preprocess: trilinear resize to `target_shape` (default `[64, 64, 64]`), z-score normalization over non-zero voxels, then tensor shape `[1, 1, D, H, W]`.
+- ONNX output: one class vector `[1, C]`, either logits or probabilities.
+- Override artifact path with `MRI_MODEL_PATH=/path/to/model.onnx`.
+
+Try the endpoint after adding the artifact:
+
+```bash
+curl -s -X POST http://localhost:8000/predict/mri \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_path": "tests/fixtures/mri_sample/subject_0.nii.gz",
+    "target_shape": [64, 64, 64],
+    "label_names": ["control", "abnormal"]
+  }' | python3 -m json.tool
+```
+
+If the ONNX artifact is missing, the endpoint returns HTTP 503 with a
+remediation hint instead of crashing.
+
 ### Run the full stack with Docker
 
 ```bash
@@ -111,6 +143,22 @@ Then browse to:
 - **MLflow UI** — <http://localhost:5000>
 
 Live-demo robustness: if the MLflow service is unreachable, set `NEUROBRIDGE_DISABLE_MLFLOW=1` to make the pipelines run without tracking.
+
+The container startup script also protects local demos with a mounted `./data`
+directory: if the host volume is empty, it seeds fixture data, trains the BBB
+model artifact, and builds the RAG FAISS index before launching the app.
+
+## Runtime Configuration
+
+| Variable | Purpose |
+|---|---|
+| `BBB_MODEL_PATH` | Override the BBB joblib artifact path (`data/processed/bbb_model.joblib`). |
+| `MRI_MODEL_PATH` | Override the MRI ONNX artifact path (`data/processed/mri_model.onnx`). |
+| `OPENROUTER_API_KEY` | Enables LLM explainer and orchestrator agent calls through OpenRouter. |
+| `OPENROUTER_FREE_MODELS` | Optional comma-separated fallback chain for the explainer. |
+| `NEUROBRIDGE_AGENT_MODEL` | OpenRouter model id for `/agent/run`. |
+| `NEUROBRIDGE_DISABLE_LLM=1` | Forces deterministic template explanations. |
+| `NEUROBRIDGE_DISABLE_MLFLOW=1` | Skips MLflow tracking/lookups when the tracking service is unavailable. |
 
 ## Repository Layout
 
@@ -126,14 +174,21 @@ Live-demo robustness: if the MLflow service is unreachable, set `NEUROBRIDGE_DIS
 │   └── processed/            # Parquet outputs from pipelines; gitignored
 ├── docs/superpowers/plans/   # Per-day implementation plans
 ├── src/
-│   ├── core/logger.py        # Shared structured logger (mandatory in every pipeline)
+│   ├── core/                 # logger, deterministic storage, MLflow tracking
 │   ├── pipelines/
 │   │   ├── bbb_pipeline.py   # Day-1 pipeline (4 public funcs + CLI entry)
 │   │   ├── eeg_pipeline.py   # Day-2 pipeline (6 public funcs + CLI entry)
 │   │   └── mri_pipeline.py   # Day-3 pipeline (5 public funcs + CLI entry)
-│   └── api/                  # FastAPI surface (placeholder until Day 4+)
+│   ├── models/
+│   │   ├── bbb_model.py      # RandomForest BBB classifier + SHAP
+│   │   └── mri_model.py      # External ONNX MRI inference surface
+│   ├── rag/                  # fastembed + FAISS ingest/retrieve layer
+│   ├── agents/               # OpenRouter orchestrator + guarded routing + tools
+│   ├── llm/                  # LLM/template explanation surface
+│   ├── api/                  # FastAPI routes + schemas
+│   └── frontend/             # Streamlit dashboard
 └── tests/
-    ├── core/, pipelines/     # Mirror src/ structure
+    ├── core/, pipelines/, models/, rag/, agents/
     └── fixtures/          # bbbp_sample.csv, eeg_sample.fif, mri_sample/ + build_*.py
 ```
 
@@ -175,6 +230,23 @@ The pipeline is seeded (`random_state=97`) and produces byte-identical Parquet o
 
 Output schema: one row per surviving subject with columns `subject_id, site, feat_roi{i}_<stat>` (8 ROIs × 6 stats = 48 features). All `feat_*` are float64 (preserved through the Parquet round-trip).
 
+## MRI Image Model
+
+`src/models/mri_model.py` is intentionally separate from `mri_pipeline.py`.
+The pipeline remains the deterministic ComBat feature-preparation surface. The
+image model is a decision layer for externally-trained volumetric DL models:
+
+| Function | Purpose |
+|---|---|
+| `load(path)` | Loads an ONNX artifact with `onnxruntime` CPU execution. |
+| `load_nifti_volume(path)` | Reads one `.nii` / `.nii.gz` volume as `float32`. |
+| `preprocess_volume(volume, target_shape)` | Validates 3-D finite data, resizes, z-scores, returns `[1, 1, D, H, W]`. |
+| `predict_nifti(model, input_path, target_shape, label_names)` | Runs preprocessing + ONNX inference and returns label, confidence, probabilities. |
+
+Public API: `POST /predict/mri`. Streamlit exposes it in the Image tab under
+"MRI Image Model". The trained artifact is not committed; put it in
+`data/processed/mri_model.onnx` or set `MRI_MODEL_PATH`.
+
 ## Storage Format
 
 Pipeline outputs are written as Parquet files using the `pyarrow` engine with snappy
@@ -186,16 +258,17 @@ for the `float64` EEG features Day 2 produces. See AGENTS.md §6.
 
 All pipeline functions and the shared logger were built TDD-first across Days 1–3 (RED → GREEN →
 REFACTOR). Each task ended in a green commit; review-and-fix loops landed as separate
-commits with `fix:` / `refactor:` prefixes. Run `pytest -v` at any time — the full suite
-finishes in under 4 seconds on a 2024 laptop.
+commits with `fix:` / `refactor:` prefixes. Run `pytest -v` at any time. Current
+verification on Windows/Python 3.11: `242 passed, 2 skipped`.
 
 ## Roadmap
 
 - **Day 2 (shipped):** `eeg_pipeline.py` — bandpass + MNE ICA artifact removal + PSD + statistical features → Parquet.
-- **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet (48 features, 106 tests green).
-- **Day 4 (shipped):** FastAPI surface in `src/api/` (POST `/pipeline/{bbb,eeg,mri}` + `/health`), MLflow experiment tracking via `src.core.tracking` (see AGENTS.md §7), Streamlit dashboard at `src/frontend/app.py`, and Docker / `docker-compose.yml` for the api + MLflow stack — 142 tests green.
-- **Day 5 (shipped):** Decision layer in `src/models/bbb_model.py` — RandomForest BBB classifier on Morgan fingerprints, SHAP top-k explanations, `POST /predict/bbb` endpoint, interactive Streamlit BBB tab with SMILES input + decision card + SHAP bar chart, and trainer CLI (`python -m src.models.bbb_model`). See AGENTS.md §8 — 158 tests green.
-- **Day 6 (shipped):** Final polish & demo features — calibration metadata bins on the BBB classifier (precision-at-confidence in `BBBPredictResponse.calibration`), edge-case dropdown in the Streamlit BBB tab (5 curated robustness probes), trust caption on the decision card, and `POST /pipeline/mri/diagnostics` returning Pre/Post ComBat long-format data + site-gap KPIs visualized as a faceted altair KDE in the MRI tab. See AGENTS.md §8 (calibration) + §9 (demo features) — 165 tests green.
+- **Day 3 (shipped):** `mri_pipeline.py` — NIfTI volume loading, brain masking, ROI feature extraction, ComBat harmonization (`neuroHarmonize`) for site-level domain shift → Parquet.
+- **Day 4 (shipped):** FastAPI surface in `src/api/` (POST `/pipeline/{bbb,eeg,mri}` + `/health`), MLflow experiment tracking via `src.core.tracking` (see AGENTS.md §7), Streamlit dashboard at `src/frontend/app.py`, and Docker / `docker-compose.yml` for the api + MLflow stack.
+- **Day 5 (shipped):** Decision layer in `src/models/bbb_model.py` — RandomForest BBB classifier on Morgan fingerprints, SHAP top-k explanations, `POST /predict/bbb` endpoint, interactive Streamlit BBB tab with SMILES input + decision card + SHAP bar chart, and trainer CLI (`python -m src.models.bbb_model`). See AGENTS.md §8.
+- **Day 6 (shipped):** Final polish & demo features — calibration metadata bins on the BBB classifier (precision-at-confidence in `BBBPredictResponse.calibration`), edge-case dropdown in the Streamlit BBB tab (5 curated robustness probes), trust caption on the decision card, and `POST /pipeline/mri/diagnostics` returning Pre/Post ComBat long-format data + site-gap KPIs visualized as a faceted altair KDE in the MRI tab. See AGENTS.md §8 (calibration) + §9 (demo features).
+- **Post-Day-8 hardening (shipped):** Orchestrator workflow guard enforces pipeline → RAG → synthesis even when the LLM skips tool calls; Docker startup guard rebuilds missing demo artifacts behind a mounted `data/`; Windows-safe MLflow test URI; MRI ONNX image decision layer at `POST /predict/mri` — 242 passed, 2 skipped.
 
 ## Where to Look
 
@@ -214,7 +287,8 @@ finishes in under 4 seconds on a 2024 laptop.
 - **Container stack:** [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml)
 - **Day-4 tests:** [`tests/api/`](tests/api/), [`tests/frontend/`](tests/frontend/), [`tests/pipelines/test_cross_pipeline_smoke.py`](tests/pipelines/test_cross_pipeline_smoke.py)
 - **Day-5 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md`](docs/superpowers/plans/2026-05-03-day5-downstream-model-xai-interactive.md)
-- **BBB downstream model (classifier + SHAP explainer + trainer CLI):** [`src/models/bbb_model.py`](src/models/bbb_model.py) + [`tests/models/test_bbb_model.py`](tests/models/test_bbb_model.py) (12 tests)
+- **BBB downstream model (classifier + SHAP explainer + trainer CLI):** [`src/models/bbb_model.py`](src/models/bbb_model.py) + [`tests/models/test_bbb_model.py`](tests/models/test_bbb_model.py)
+- **MRI image DL decision layer:** [`src/models/mri_model.py`](src/models/mri_model.py) + [`tests/models/test_mri_model.py`](tests/models/test_mri_model.py); `POST /predict/mri` consumes an externally-trained ONNX artifact at `data/processed/mri_model.onnx` (`MRI_MODEL_PATH` override).
 - **Day-6 plan (full TDD task breakdown):** [`docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md`](docs/superpowers/plans/2026-05-04-day6-final-polish-demo-features.md)
 - **MRI ComBat diagnostics surface (pre/post site-gap KPIs):** `POST /pipeline/mri/diagnostics` — see [`src/api/routes.py`](src/api/routes.py) + [`src/pipelines/mri_pipeline.py`](src/pipelines/mri_pipeline.py)
 - **Day-7 design spec:** [`docs/superpowers/specs/2026-05-05-day7-drift-traceability-agents-design.md`](docs/superpowers/specs/2026-05-05-day7-drift-traceability-agents-design.md)
@@ -225,10 +299,10 @@ finishes in under 4 seconds on a 2024 laptop.
 - **New surfaces:** `POST /explain/eeg`, `POST /explain/mri`, `GET /experiments/runs`, `POST /experiments/diff`
 - **New deploy artifacts:** `Dockerfile.hf`, `supervisord.conf`
 - **LLM hardening (post-Day 8):** real OpenRouter LLM is now the default in deployed Spaces — `Dockerfile`/`Dockerfile.hf` no longer hard-code `NEUROBRIDGE_DISABLE_LLM=1`. Free-tier fallback chain (10 models, smartest → smallest) in [`src/llm/explainer.py`](src/llm/explainer.py), 401/400 status classification, and language-matching / intent-split prompt. Diagnostic endpoint `GET /diag/openrouter` ([`src/api/main.py`](src/api/main.py)) + Streamlit sidebar "🔧 Diagnose LLM" button. Live verification helper: [`scripts/diagnose_openrouter.py`](scripts/diagnose_openrouter.py).
-- **Orchestrator agent (Task 13):** [`src/agents/orchestrator.py`](src/agents/orchestrator.py), [`src/agents/tools.py`](src/agents/tools.py), [`src/agents/prompts.py`](src/agents/prompts.py)
+- **Orchestrator agent (Task 13):** [`src/agents/orchestrator.py`](src/agents/orchestrator.py), [`src/agents/routing.py`](src/agents/routing.py), [`src/agents/tools.py`](src/agents/tools.py), [`src/agents/prompts.py`](src/agents/prompts.py). Guarded workflow enforces one pipeline tool, then `retrieve_context`, then final synthesis.
 - **RAG layer:** [`src/rag/`](src/rag/) — chunker, embedder (fastembed), FAISS store, retriever, ingest CLI
 - **Agent endpoint:** `POST /agent/run` (orchestrator + RAG); diagnostic at `GET /diag/agent`
-- **Streamlit Agent tab:** "🤖 Agent" tab in [`src/frontend/app.py`](src/frontend/app.py) — input box + decision-trace expander
+- **Streamlit Agent tab:** "🤖 Agent" tab in [`src/frontend/app.py`](src/frontend/app.py) — input box + optional MRI `sites_csv` + decision-trace expander.
 - **RAG knowledge base:** drop `.md`/`.pdf` into [`data/knowledge_base/`](data/knowledge_base/) — see its README
 
 ## Day 7 — Demo Recipe

@@ -31,6 +31,7 @@ mlflow==2.16.0
 # --- Downstream ML / XAI (Day 5 decision layer) ---
 shap==0.46.0
 joblib==1.4.2
+onnxruntime==1.19.2  # MRI volumetric ONNX inference (external DL artifact)
 
 # --- Tooling / tests ---
 pytest==8.3.3
@@ -47,3 +48,4 @@ streamlit==1.39.0
 
 # --- LLM provider (Day 7 explainer) ---
 openai==1.51.0  # OpenRouter SDK (Day-7 LLM explainer; deterministic-template fallback always available)
+python-dotenv==1.0.1  # Load OPENROUTER_API_KEY from local .env for API/agent demos

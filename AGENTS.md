@@ -50,10 +50,14 @@ All experiment runs are tracked in **MLflow**. All services ship as **Docker** i
 │   │   ├── storage.py        # Parquet read/write helpers (snappy, single-threaded, deterministic)
 │   │   └── tracking.py       # MLflow `track_pipeline_run` context manager (see §7)
 │   ├── pipelines/            # One file per modality. Pure functions + a `run_pipeline()` entry.
-│   ├── models/               # Downstream decision-layer models (consume processed features)
-│   │   └── bbb_model.py      # BBB-permeability classifier + SHAP explainer + trainer CLI
+│   ├── models/               # Downstream decision-layer models
+│   │   ├── bbb_model.py      # BBB-permeability classifier + SHAP explainer + trainer CLI
+│   │   └── mri_model.py      # Volumetric MRI ONNX inference surface (external training)
+│   ├── llm/                  # Natural-language explainers (template + OpenRouter fallback)
+│   ├── rag/                  # Fastembed + FAISS retrieval layer
+│   ├── agents/               # Tool registry + guarded OpenRouter orchestrator
 │   └── frontend/
-│       └── app.py            # Streamlit dashboard (3 tabs, one per modality)
+│       └── app.py            # Streamlit dashboard
 └── tests/
     ├── core/
     ├── api/
@@ -148,30 +152,42 @@ The repo-wide `conftest.py` autouse fixture pins `MLFLOW_TRACKING_URI` to a tmp 
 ## 8. Decision Layer (Downstream Models)
 
 Pipelines produce features (`data/processed/<modality>_features.parquet`).
-Downstream models live in `src/models/` and consume those features:
+Downstream models live in `src/models/` and consume processed features or a
+deterministic model-local preprocessing contract:
 
 | Model | File | Output | Endpoint |
 |---|---|---|---|
 | BBB permeability | `src/models/bbb_model.py` | `data/processed/bbb_model.joblib` | `POST /predict/bbb` |
+| MRI image classifier | `src/models/mri_model.py` | `data/processed/mri_model.onnx` | `POST /predict/mri` |
 
-Each downstream model module exposes a uniform surface:
+In-repo trainable downstream model modules expose a uniform surface:
 - `train(df, label_col, ...)` → fitted classifier
 - `save(model, path)` / `load(path)` → joblib artifact I/O
 - `predict_with_proba(model, smiles)` → `{label, confidence}` (confidence is the max-class probability)
 - `explain_prediction(model, smiles, top_k)` → SHAP top-k attributions sorted by `|shap_value|` descending
 
-The API loads the joblib artifact at request time. If the artifact is
-missing, the endpoint returns **HTTP 503** with a remediation hint pointing
-at the trainer CLI (`python -m src.models.<name>`). This keeps the API
-process startup fast and lets operators retrain without redeploying — the
-Day-5 analog of Day-4's `NEUROBRIDGE_DISABLE_MLFLOW` lifeline.
+MRI DL exception: training happens outside this repo and exports ONNX, so it
+does not expose `train()` or SHAP. Runtime
+loads the ONNX artifact with `mri_model.load()`, preprocesses one NIfTI via the
+same deterministic resize + z-score contract used during training
+(`preprocess_nifti()`), then returns class probabilities via `predict_nifti()`.
 
-**Determinism**: all classifiers are seeded (`random_state=42` default),
-`n_jobs=1` (no tree-parallelism races). Re-running the trainer on the same
-Parquet produces identical predictions.
+The API loads model artifacts at request time. If an artifact is missing,
+the endpoint returns **HTTP 503** with a remediation hint instead of failing
+process startup. BBB points at the trainer CLI (`python -m src.models.bbb_model`);
+MRI points at the external ONNX export path.
+
+**Determinism**: all in-repo classifiers are seeded (`random_state=42`
+default), `n_jobs=1` (no tree-parallelism races). Re-running the BBB trainer
+on the same Parquet produces identical predictions. MRI ONNX determinism is
+bounded by the exported model plus the fixed runtime preprocessing contract.
 
 **Override `BBB_MODEL_PATH`** env var to point the API at a non-default
 artifact location (used by tests for tmp_path isolation).
+
+**Override `MRI_MODEL_PATH`** env var to point the API at a non-default ONNX
+artifact location. If the ONNX artifact is missing, `POST /predict/mri`
+returns **HTTP 503** with a remediation hint.
 
 **Calibration metadata** (Day 6): `train()` does an 80/20 stratified split,
 computes precision-at-confidence-threshold bins on the held-out test set,
@@ -282,8 +298,9 @@ metrics, params). `POST /experiments/diff {run_id_a, run_id_b}`
 returns a side-by-side metric+param diff (`RunDiffRow`).
 
 When `NEUROBRIDGE_DISABLE_MLFLOW=1`, both endpoints return empty
-responses without raising — required for the HF Spaces deployment
-where there is no writable mlruns/ tree. Unknown run ids → 404.
+responses without raising — useful for deployments where there is no
+writable `mlruns/` tree or the tracking server is unavailable. Unknown
+run ids → 404.
 
 The Streamlit "Experiments" tab is the user-facing surface. Cached
 in session state with an explicit Refresh button.
@@ -293,15 +310,22 @@ in session state with an explicit Refresh button.
 `Dockerfile.hf` is the Hugging Face Spaces image. Single container,
 two processes (FastAPI :8000 + Streamlit :7860) launched via
 `supervisord.conf`. Build-time `RUN python -m src.models.bbb_model`
-bakes the model artifact into the image so the first `/predict/bbb`
-call is instant on cold start.
+bakes the BBB model artifact into the image so the first `/predict/bbb`
+call is instant on cold start. Build-time RAG ingest creates
+`data/processed/faiss_index/`.
 
-Default environment: `DEPLOY_ENV=hf_spaces`,
-`NEUROBRIDGE_DISABLE_MLFLOW=1`. The LLM kill-switch is **not** set —
-deployed Spaces use the real OpenRouter free-tier chain (§11) when
+`docker-entrypoint.sh` is the runtime guard for local Docker/Compose demos:
+when a mounted `./data` volume hides image-built artifacts, it seeds fixture
+raw data, rebuilds missing BBB features/model artifacts, and rebuilds the
+FAISS index before starting supervisord. It does not bake
+`NEUROBRIDGE_DISABLE_MLFLOW=1` into the image; operators may set that env at
+runtime if their tracking service is unavailable.
+
+Default environment: `DEPLOY_ENV=hf_spaces`. The LLM kill-switch is **not**
+set — deployed Spaces use the real OpenRouter free-tier chain (§11) when
 `OPENROUTER_API_KEY` is configured in the Space's Secrets panel. Set
-`NEUROBRIDGE_DISABLE_LLM=1` only when you want to force the
-deterministic template path for a fully-reproducible demo.
+`NEUROBRIDGE_DISABLE_LLM=1` only when you want to force the deterministic
+template path for a fully-reproducible demo.
 
 The README's YAML front-matter declares the Space metadata
 (SDK=docker, port=7860, app_file=src/frontend/app.py).
@@ -309,24 +333,30 @@ The README's YAML front-matter declares the Space metadata
 ## 15. Orchestrator Agent Surface
 
 `src/agents/orchestrator.py` exposes a single-agent function-calling
-loop over the openai SDK (no LangChain / framework dep). The agent
-holds 4 tools, defined in `src/agents/tools.py`:
+loop over the openai SDK (no LangChain / framework dep). The API enables
+the guarded workflow mode: if the LLM skips or mis-shapes a required tool
+call, deterministic routing in `src/agents/routing.py` falls back to exactly
+one pipeline tool, then exactly one retrieval tool, then final synthesis.
+The agent holds 4 tools, defined in `src/agents/tools.py`:
 
 - `run_bbb_pipeline(smiles, top_k)` — wraps `POST /predict/bbb`
 - `run_eeg_pipeline(input_path)` — wraps `POST /pipeline/eeg`
-- `run_mri_pipeline(input_dir, sites_csv)` — wraps `POST /pipeline/mri`
+- `run_mri_pipeline(input_dir, sites_csv=None)` — wraps `POST /pipeline/mri`
+  and defaults `sites_csv` to `<input_dir>/sites.csv`
 - `retrieve_context(query, k)` — wraps `src/rag/retrieve.py`
 
 The system prompt (`src/agents/prompts.py:ORCHESTRATOR_SYSTEM_PROMPT`)
-locks the workflow: pick exactly one pipeline → run it → formulate a
-focused retrieval query → call retrieve_context → synthesize a
-3-5 sentence response that cites at least one chunk. Language of the
-final response is mirrored from the user's question.
+describes the workflow: pick exactly one pipeline → run it → formulate a
+focused retrieval query → call retrieve_context → synthesize a 3-5 sentence
+response that cites at least one chunk. The API-side workflow guard enforces
+that order in code; the prompt is guidance, not the only control plane.
+Language of the final response is mirrored from the user's question.
 
-`POST /agent/run` is the public surface. Default model is
-`google/gemini-2.0-flash-exp:free` on OpenRouter (function-calling
-support verified). Override via `NEUROBRIDGE_AGENT_MODEL` env var.
-Returns 503 when `OPENROUTER_API_KEY` is unset.
+`POST /agent/run` is the public surface. It accepts `user_input`,
+optional `user_question`, and optional MRI `sites_csv`. Default model is
+`google/gemini-2.0-flash-exp:free` on OpenRouter (function-calling support
+verified). Override via `NEUROBRIDGE_AGENT_MODEL` env var. Returns 503 when
+`OPENROUTER_API_KEY` is unset.
 
 Diagnostics: `GET /diag/agent` returns key presence, configured model,
 RAG index status (chunk count), and the registered tool names.
@@ -345,9 +375,10 @@ user-supplied `.md` / `.txt` / `.pdf`). Build the FAISS index with:
 
 Defaults: input=`data/knowledge_base/`, output=`data/processed/faiss_index/`.
 The Dockerfile runs this at build time so deployed Spaces start with
-a populated index. Empty KB → empty index → `retrieve_context`
-returns 0 chunks; the agent surfaces this and answers from the
-pipeline result alone.
+a populated index. `docker-entrypoint.sh` also rebuilds the index at
+startup when a mounted `data/` volume hides the image-built artifacts.
+Empty KB → empty index → `retrieve_context` returns 0 chunks; the agent
+surfaces this and answers from the pipeline result alone.
 
 `tests/fixtures/kb_sample/` ships 3 seed markdown files (Lipinski,
 ComBat, MNE+ICA) — these double as test fixtures and as the demo

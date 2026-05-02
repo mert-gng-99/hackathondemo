@@ -113,6 +113,38 @@ class BBBPredictResponse(BaseModel):
     )
 
 
+class MRIPredictRequest(BaseModel):
+    """Single-subject MRI image prediction request."""
+    input_path: str = Field(..., description="Path to one .nii or .nii.gz MRI volume")
+    target_shape: tuple[int, int, int] = Field(
+        (64, 64, 64),
+        description="Model preprocessing resize target as (D, H, W)",
+    )
+    label_names: list[str] | None = Field(
+        None,
+        description="Optional class labels matching ONNX output order",
+    )
+
+
+class MRIClassProbability(BaseModel):
+    """One MRI model class probability."""
+    label: int
+    label_text: str
+    probability: float
+
+
+class MRIPredictResponse(BaseModel):
+    """MRI DL decision payload from a volumetric ONNX model."""
+    model_config = ConfigDict(protected_namespaces=())
+
+    label: int
+    label_text: str
+    confidence: float
+    probabilities: list[MRIClassProbability]
+    input_path: str
+    model_path: str
+
+
 class MRIDiagnosticsRequest(BaseModel):
     """Request body for /pipeline/mri/diagnostics — same as MRIRequest minus output_path."""
     input_dir: str = Field(..., description="Directory of .nii.gz files")
@@ -237,6 +269,10 @@ class AgentRunRequest(BaseModel):
     user_input: str = Field(..., min_length=1, description="SMILES, file path, or directory path")
     user_question: str | None = Field(
         None, description="Optional natural-language question to language-match the response"
+    )
+    sites_csv: str | None = Field(
+        None,
+        description="Optional MRI sites CSV. Defaults to <user_input>/sites.csv for directory inputs.",
     )
 
 

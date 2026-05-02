@@ -1318,6 +1318,48 @@ def _render_mri_tab() -> None:
             except httpx.RequestError as e:
                 st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
 
+    st.markdown("#### MRI Image Model")
+    mri_image = st.text_input(
+        "NIfTI image",
+        "tests/fixtures/mri_sample/subject_0.nii.gz",
+        key="mri_predict_image",
+    )
+    mri_labels = st.text_input(
+        "Class labels",
+        "control,abnormal",
+        key="mri_predict_labels",
+    )
+    if st.button("Predict MRI image", key="mri_predict"):
+        labels = [x.strip() for x in mri_labels.split(",") if x.strip()]
+        payload: dict = {
+            "input_path": mri_image,
+            "target_shape": [64, 64, 64],
+        }
+        if labels:
+            payload["label_names"] = labels
+        with st.spinner("Running MRI image model..."):
+            try:
+                result = _post("/predict/mri", payload, timeout=120.0)
+            except httpx.HTTPStatusError as e:
+                detail = e.response.text
+                if e.response.status_code == 503:
+                    st.warning(
+                        "MRI model artifact is not available yet. Export the trained "
+                        "ONNX model to `data/processed/mri_model.onnx` or set `MRI_MODEL_PATH`."
+                    )
+                else:
+                    st.error(f"MRI prediction failed (HTTP {e.response.status_code}): {detail}")
+            except httpx.RequestError as e:
+                st.error(f"Cannot reach FastAPI at {_API_URL}: {e!r}")
+            else:
+                st.metric(
+                    label=result.get("label_text", "prediction"),
+                    value=f"{float(result.get('confidence', 0.0)) * 100:.1f}%",
+                )
+                probs = result.get("probabilities", [])
+                if probs:
+                    st.dataframe(probs, use_container_width=True, hide_index=True)
+
 
 def _render_prediction_card(result: dict) -> None:
     """Editorial decision card: provenance · verdict · signals · SHAP."""
@@ -1790,6 +1832,11 @@ def main() -> None:
                 value="",
                 help="Ask in any language — the agent will mirror it in the response",
             )
+            agent_sites_csv = st.text_input(
+                "MRI sites CSV (optional)",
+                value="",
+                help="Defaults to <MRI input directory>/sites.csv",
+            )
             submitted = st.form_submit_button("Run agent")
 
         if submitted and agent_input:
@@ -1798,6 +1845,8 @@ def main() -> None:
                     payload: dict = {"user_input": agent_input}
                     if agent_question:
                         payload["user_question"] = agent_question
+                    if agent_sites_csv:
+                        payload["sites_csv"] = agent_sites_csv
                     response = _post("/agent/run", payload, timeout=120.0)
                 except Exception as e:
                     st.error(f"Agent run failed: {e}")

@@ -1,8 +1,10 @@
 # RAG Knowledge Base
 
-Drop reference documents here (`.md`, `.txt`, or `.pdf`). They will be
-ingested by `python -m src.rag.ingest` at Docker build time and surfaced
-to the orchestrator agent via the `retrieve_context` tool.
+Drop reference documents here (`.md`, `.txt`, or `.pdf`). They are ingested by
+`python -m src.rag.ingest` at Docker build time and surfaced to the orchestrator
+agent via the `retrieve_context` tool. The container entrypoint also rebuilds
+the index at startup when a mounted `data/` volume does not already contain
+`data/processed/faiss_index/`.
 
 ## Recommended seed set
 

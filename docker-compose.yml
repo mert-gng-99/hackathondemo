@@ -18,6 +18,9 @@ services:
       - "8000:8000"
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      NEUROBRIDGE_DISABLE_MLFLOW: "0"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      NEUROBRIDGE_AGENT_MODEL: ${NEUROBRIDGE_AGENT_MODEL:-google/gemini-2.0-flash-exp:free}
     depends_on:
       - mlflow
     volumes:

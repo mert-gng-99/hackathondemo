@@ -19,7 +19,7 @@ class _FakeOrchestrator:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
-    def run(self, user_input: str) -> AgentResult:
+    def run(self, user_input: str, context: dict[str, Any] | None = None) -> AgentResult:
         return AgentResult(
             text=f"Synthesized answer for: {user_input}",
             trace=[

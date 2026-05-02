@@ -17,7 +17,7 @@ import pytest
 @pytest.fixture(autouse=True, scope="session")
 def _isolate_mlflow_tracking_uri() -> Iterator[None]:
     tmp_root = Path(tempfile.mkdtemp(prefix="mlflow_test_"))
-    os.environ["MLFLOW_TRACKING_URI"] = f"file://{tmp_root}"
+    os.environ["MLFLOW_TRACKING_URI"] = tmp_root.as_uri()
     yield
     # Don't rmtree — pytest tmpdir cleanup or OS handles it; rmtree
     # races with mlflow background writes on slow CI.

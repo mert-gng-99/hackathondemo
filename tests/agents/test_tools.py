@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel
@@ -91,6 +93,7 @@ class TestBuildDefaultTools:
         assert "input_path" in EEGPipelineInput.model_fields
         assert "input_dir" in MRIPipelineInput.model_fields
         assert "sites_csv" in MRIPipelineInput.model_fields
+        assert "sites_csv" not in MRIPipelineInput.model_json_schema().get("required", [])
         assert "query" in RetrieveContextInput.model_fields
         assert "k" in RetrieveContextInput.model_fields
 
@@ -116,7 +119,6 @@ class TestBuildDefaultTools:
         assert len(tools) == 4
 
     def test_bbb_executor_translates_httpexception_to_valueerror(self) -> None:
-        from unittest.mock import patch
         from fastapi import HTTPException
 
         tools = build_default_tools(rag_index_dir=None)
@@ -126,3 +128,25 @@ class TestBuildDefaultTools:
                    side_effect=HTTPException(status_code=503, detail="model missing")):
             with pytest.raises(ValueError, match="bbb tool failed"):
                 bbb.invoke({"smiles": "CCO"})
+
+    def test_mri_executor_defaults_sites_csv_to_input_dir_sites_csv(self, tmp_path: Path) -> None:
+        tools = build_default_tools(rag_index_dir=None, processed_dir=tmp_path / "processed")
+        mri = next(t for t in tools if t.name == "run_mri_pipeline")
+        input_dir = tmp_path / "mri"
+        input_dir.mkdir()
+
+        with patch(
+            "src.api.routes.run_mri",
+            return_value=SimpleNamespace(
+                output_path=str(tmp_path / "processed" / "mri_features.parquet"),
+                rows=2,
+                columns=3,
+                duration_sec=0.1,
+            ),
+        ) as run_mri:
+            out = mri.invoke({"input_dir": str(input_dir)})
+
+        assert out["rows"] == 2
+        req = run_mri.call_args.args[0]
+        assert req.input_dir == str(input_dir)
+        assert req.sites_csv == str(input_dir / "sites.csv")

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -71,6 +73,22 @@ class TestMRIRoute:
         )
         assert resp.status_code == 200
         assert resp.json()["rows"] > 0
+
+
+class TestPipelineWrap:
+    def test_wrap_skips_mlflow_lookup_when_disabled(self, tmp_path: Path, monkeypatch):
+        from src.api import routes
+
+        out = tmp_path / "out.parquet"
+        pd.DataFrame({"x": [1]}).to_parquet(out)
+        monkeypatch.setenv("NEUROBRIDGE_DISABLE_MLFLOW", "1")
+
+        with patch("src.api.routes.mlflow.search_runs") as search_runs:
+            resp = routes._wrap("bbb_pipeline", out, lambda: None)
+
+        search_runs.assert_not_called()
+        assert resp.status == "ok"
+        assert resp.mlflow_run_id is None
 
 
 class TestBBBPredictRoute:
@@ -196,6 +214,56 @@ class TestBBBPredictRoute:
             json={"smiles": "CCO", "top_k": 5},
         )
         assert resp.status_code == 503
+
+
+class TestMRIPredictRoute:
+    def test_returns_503_when_artifact_missing(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("MRI_MODEL_PATH", str(tmp_path / "missing.onnx"))
+
+        resp = client.post(
+            "/predict/mri",
+            json={"input_path": str(_FIXTURES / "mri_sample" / "subject_0.nii.gz")},
+        )
+
+        assert resp.status_code == 503
+        assert "MRI model artifact not available" in resp.text
+
+    def test_returns_404_when_input_missing(self, tmp_path: Path, monkeypatch):
+        from tests.fixtures.build_dummy_mri_onnx import build as build_dummy_mri_onnx
+
+        artifact = build_dummy_mri_onnx(tmp_path / "mri_model.onnx")
+        monkeypatch.setenv("MRI_MODEL_PATH", str(artifact))
+
+        resp = client.post(
+            "/predict/mri",
+            json={"input_path": str(tmp_path / "missing.nii.gz"), "target_shape": [8, 8, 8]},
+        )
+
+        assert resp.status_code == 404
+
+    def test_returns_200_with_prediction(self, tmp_path: Path, monkeypatch):
+        from tests.fixtures.build_dummy_mri_onnx import build as build_dummy_mri_onnx
+
+        artifact = build_dummy_mri_onnx(tmp_path / "mri_model.onnx")
+        monkeypatch.setenv("MRI_MODEL_PATH", str(artifact))
+
+        resp = client.post(
+            "/predict/mri",
+            json={
+                "input_path": str(_FIXTURES / "mri_sample" / "subject_0.nii.gz"),
+                "target_shape": [8, 8, 8],
+                "label_names": ["control", "abnormal"],
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["label"] == 1
+        assert body["label_text"] == "abnormal"
+        assert body["confidence"] > 0.5
+        assert body["input_path"].endswith("subject_0.nii.gz")
+        assert body["model_path"] == str(artifact)
+        assert len(body["probabilities"]) == 2
 
 
 class TestMRIDiagnosticsRoute:

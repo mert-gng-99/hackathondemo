@@ -28,7 +28,10 @@ class EEGPipelineInput(BaseModel):
 class MRIPipelineInput(BaseModel):
     """Input for `run_mri_pipeline` — directory of NIfTI files + sites CSV."""
     input_dir: str = Field(..., description="Directory containing .nii.gz volumes")
-    sites_csv: str = Field(..., description="CSV mapping subject_id → site")
+    sites_csv: str | None = Field(
+        None,
+        description="CSV mapping subject_id → site; defaults to <input_dir>/sites.csv",
+    )
 
 
 class RetrieveContextInput(BaseModel):
