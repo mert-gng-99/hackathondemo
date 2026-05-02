@@ -23,8 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # --- Python deps ---
+# Install CPU-only torch first to avoid pulling ~2GB of NVIDIA CUDA wheels
+# (cublas/cudnn/nccl/...) that we never use on a CPU-only HF Space and which
+# blow past the build-time disk budget. Subsequent pip install -r sees torch
+# already at the pinned version and skips it.
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.4.1 torchvision==0.19.1 \
+    && pip install -r requirements.txt
 
 # --- project source ---
 COPY src/ ./src/
