@@ -56,8 +56,6 @@ class TestMRIDLModel:
     def test_predict_warns_on_label_count_mismatch(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        import logging
-
         artifact = build_dummy_mri_onnx(tmp_path / "mri_model.onnx")
         model = mri_model.load(artifact)
 
@@ -65,13 +63,12 @@ class TestMRIDLModel:
         # caplog root handler never sees its records. Attach caplog.handler directly.
         mri_model.logger.addHandler(caplog.handler)
         try:
-            with caplog.at_level(logging.WARNING, logger="src.models.mri_model"):
-                result = mri_model.predict_nifti(
-                    model,
-                    _FIXTURE_MRI,
-                    target_shape=(8, 8, 8),
-                    label_names=("control", "abnormal", "extra"),
-                )
+            result = mri_model.predict_nifti(
+                model,
+                _FIXTURE_MRI,
+                target_shape=(8, 8, 8),
+                label_names=("control", "abnormal", "extra"),
+            )
         finally:
             mri_model.logger.removeHandler(caplog.handler)
 
