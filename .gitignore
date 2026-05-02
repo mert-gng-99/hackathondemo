@@ -35,9 +35,10 @@ mlartifacts/
 .vscode/
 .DS_Store
 
-# RAG knowledge base (user-supplied PDFs/MD; not source-controlled)
-data/knowledge_base/*.pdf
-data/knowledge_base/*.PDF
+# RAG knowledge base — ignore user-supplied content; allow only README/.gitkeep
+data/knowledge_base/*
+!data/knowledge_base/README.md
+!data/knowledge_base/.gitkeep
 
 # RAG built artifacts
 data/processed/faiss_index/
