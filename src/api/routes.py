@@ -726,8 +726,20 @@ _AGENT_FALLBACK_CHAIN: tuple[str, ...] = (
 )
 
 
+# Cache the chosen model per process so we don't probe on every agent call.
+_AGENT_MODEL_CACHE: dict[str, str] = {}
+
+
 def _pick_working_agent_model(client: Any, candidates: tuple[str, ...]) -> str:
-    """Return the first candidate that responds to a tiny ping; else last one."""
+    """Return the first candidate that responds to a tiny ping; else last one.
+
+    Cached per process — first /agent/run call probes once; subsequent calls
+    reuse the picked model. To force a re-probe set NEUROBRIDGE_AGENT_MODEL_CHAIN
+    or restart the worker.
+    """
+    cache_key = "|".join(candidates)
+    if cache_key in _AGENT_MODEL_CACHE:
+        return _AGENT_MODEL_CACHE[cache_key]
     for m in candidates:
         try:
             client.chat.completions.create(
@@ -736,11 +748,14 @@ def _pick_working_agent_model(client: Any, candidates: tuple[str, ...]) -> str:
                 max_tokens=4, temperature=0,
             )
             logger.info("agent model selected: %s", m)
+            _AGENT_MODEL_CACHE[cache_key] = m
             return m
         except Exception as e:
             logger.info("agent model unavailable: %s (%s)", m, type(e).__name__)
-    logger.warning("no agent model responded; falling back to %s", candidates[-1])
-    return candidates[-1]
+    fallback = candidates[-1]
+    logger.warning("no agent model responded; falling back to %s", fallback)
+    _AGENT_MODEL_CACHE[cache_key] = fallback
+    return fallback
 
 
 def _build_orchestrator():

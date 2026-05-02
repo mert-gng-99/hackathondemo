@@ -27,4 +27,8 @@ if [ ! -f data/processed/faiss_index/index.bin ]; then
   python -m src.rag.ingest data/knowledge_base data/processed/faiss_index
 fi
 
+# Demo-time stub artifacts (MRI 2D, volumetric ONNX, EEG joblib, clinical
+# TF-IDF RAG, axial PNG). Idempotent — only fills missing ones.
+python scripts/seed_demo_artifacts.py || true
+
 exec "$@"

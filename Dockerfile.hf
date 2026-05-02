@@ -29,6 +29,7 @@ RUN pip install -r requirements.txt
 # --- project source ---
 COPY src/ ./src/
 COPY tests/fixtures/ ./tests/fixtures/
+COPY scripts/ ./scripts/
 COPY supervisord.conf ./supervisord.conf
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
@@ -52,6 +53,12 @@ RUN mkdir -p data/raw data/processed && \
 # still functions, retrieve_context just returns no chunks.
 COPY tests/fixtures/kb_sample/ ./data/knowledge_base/seed/
 RUN python -m src.rag.ingest data/knowledge_base data/processed/faiss_index
+
+# --- Demo-time artifacts (MRI 2D / MRI volumetric ONNX / EEG joblib /
+#     clinical TF-IDF RAG / axial PNG fixture). Idempotent script;
+#     entrypoint also re-runs it on container start so a mounted-volume
+#     deployment can re-seed without a rebuild.
+RUN python scripts/seed_demo_artifacts.py
 
 # --- HF Spaces convention ---
 EXPOSE 7860
