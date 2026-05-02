@@ -7,6 +7,7 @@ tools and assembles the trace correctly.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -258,6 +259,7 @@ class TestOrchestrator:
             workflow_query_builder=lambda user_input, pipeline_trace, context: "q",
         )
         from src.agents import orchestrator as orch_module
+        caplog.handler.setLevel(logging.INFO)
         orch_module.logger.addHandler(caplog.handler)
         try:
             result = orch.run("CCO")
