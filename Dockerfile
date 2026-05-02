@@ -48,9 +48,10 @@ COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # --- Demo-time stub artifacts (MRI 2D / MRI volumetric ONNX / EEG joblib /
-#     clinical TF-IDF RAG / axial PNG fixture). Idempotent script — also
-#     re-run by the entrypoint at container start to fill any missing slots.
-RUN python scripts/seed_demo_artifacts.py
+#     clinical TF-IDF RAG / axial PNG fixture). Idempotent. Wrapped in
+#     `|| true` so a build-time failure here doesn't kill the image — the
+#     entrypoint re-runs the same script at container start.
+RUN python scripts/seed_demo_artifacts.py || echo "WARN: seed_demo_artifacts failed at build, entrypoint will retry"
 
 # Seed kb_sample docs into the knowledge_base directory; entrypoint will
 # build the FAISS index from these on first start.
