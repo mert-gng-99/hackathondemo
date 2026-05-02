@@ -275,8 +275,15 @@ class TestLiveOpenRouterLLM:
         import logging
         from src.llm import explainer as ex
 
-        with caplog.at_level(logging.INFO, logger="src.llm.explainer"):
-            result = ex.explain(_payload(), modality="bbb")
+        # The explainer's logger has propagate=False (see src/core/logger.py),
+        # so caplog's root-level handler never sees its records. Attach the
+        # caplog handler directly to bypass propagation.
+        ex.logger.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.INFO, logger="src.llm.explainer"):
+                result = ex.explain(_payload(), modality="bbb")
+        finally:
+            ex.logger.removeHandler(caplog.handler)
 
         # Flaky-network safety net: only skip when we have evidence the
         # template fallback fired due to transient infra (rate-limit,
