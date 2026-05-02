@@ -32,6 +32,9 @@ mlflow==2.16.0
 shap==0.46.0
 joblib==1.4.2
 onnxruntime==1.19.2  # MRI volumetric ONNX inference (external DL artifact)
+torch==2.4.1                  # MRI 2D resnet18 inference (Plan: external-assets-integration)
+torchvision==0.19.1           # resnet18 + image transforms
+pillow==10.4.0                # image loading for 2D MRI inputs
 
 # --- Tooling / tests ---
 pytest==8.3.3
