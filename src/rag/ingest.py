@@ -77,8 +77,8 @@ def main() -> None:
     args = sys.argv[1:]
     inp = Path(args[0]) if len(args) >= 1 else _DEFAULT_INPUT
     out = Path(args[1]) if len(args) >= 2 else _DEFAULT_OUTPUT
-    n = ingest_directory(inp, out)
-    print(f"Indexed {n} chunks into {out}")
+    ingest_directory(inp, out)
+    # Per-call summary already logged at INFO inside ingest_directory; no print() in src/.
 
 
 if __name__ == "__main__":
