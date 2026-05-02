@@ -34,3 +34,10 @@ mlartifacts/
 .idea/
 .vscode/
 .DS_Store
+
+# RAG knowledge base (user-supplied PDFs/MD; not source-controlled)
+data/knowledge_base/*.pdf
+data/knowledge_base/*.PDF
+
+# RAG built artifacts
+data/processed/faiss_index/
