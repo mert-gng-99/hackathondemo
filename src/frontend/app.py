@@ -1074,6 +1074,13 @@ def _render_sidebar(api_ok: bool, api_status: str) -> None:
             unsafe_allow_html=True,
         )
 
+        if st.button("🔧 Diagnose LLM", key="diag_llm_btn", help="Probe OpenRouter from this container"):
+            try:
+                diag = httpx.get(f"{_API_URL}/diag/openrouter", timeout=15.0).json()
+                st.json(diag)
+            except Exception as e:
+                st.error(f"diag failed: {e!r}")
+
         st.markdown("### About")
         st.markdown(
             "<p style='font-size:0.86rem;color:var(--ng-text-secondary);"
