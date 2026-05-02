@@ -11,6 +11,7 @@ from src.api.routes import (
     predict_router,
     explain_router,
     experiments_router,
+    agent_router,
 )
 from src.api.schemas import HealthResponse
 
@@ -24,6 +25,7 @@ app.include_router(pipeline_router)
 app.include_router(predict_router)
 app.include_router(explain_router)
 app.include_router(experiments_router)
+app.include_router(agent_router)
 
 
 @app.get("/health", response_model=HealthResponse)
