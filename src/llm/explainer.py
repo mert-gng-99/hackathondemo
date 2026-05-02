@@ -302,6 +302,26 @@ def _llm_explain(payload: ExplainPayload, modality: str = "bbb") -> tuple[str, s
             continue
         except APIStatusError as e:
             status = getattr(e, "status_code", None)
+            # 401 = unauthorized — the key is bad, no model in this chain
+            # will succeed. Surface a loud, actionable hint and bail.
+            if status == 401:
+                logger.warning(
+                    "OpenRouter 401 unauthorized on %s. The OPENROUTER_API_KEY "
+                    "is rejected — verify it is current at "
+                    "https://openrouter.ai/keys and that free-model data-sharing "
+                    "is enabled at https://openrouter.ai/settings/privacy. "
+                    "Falling back to deterministic template.",
+                    model,
+                )
+                return None
+            # 400 = malformed prompt for this specific model (e.g. it
+            # rejected our system role). Skip this model, try the next.
+            if status == 400:
+                logger.info(
+                    "OpenRouter 400 on %s (likely prompt-shape mismatch); "
+                    "advancing to next free model.", model,
+                )
+                continue
             # 402 credits / 403 access / 404 retired-id / 5xx upstream → next.
             if status in (402, 403, 404) or (status is not None and 500 <= status < 600):
                 logger.info("OpenRouter %s on %s; advancing to next free model.", status, model)
